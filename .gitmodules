@@ -1,0 +1,3 @@
+[submodule "auto-verilog"]
+	path = auto-verilog
+	url = git@github.com:vim-scripts/automatic-for-Verilog.git
