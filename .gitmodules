@@ -1,3 +1,6 @@
 [submodule "auto-verilog"]
 	path = auto-verilog
 	url = git@github.com:vim-scripts/automatic-for-Verilog.git
+[submodule "external/slang"]
+	path = external/slang
+	url = https://github.com/MikePopoloski/slang.git
