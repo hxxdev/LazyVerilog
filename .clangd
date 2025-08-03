@@ -1,0 +1,4 @@
+CompileFlags:
+  Add: [-xc++, -Wall, -std=c++20]
+  Remove: [-W*]
+  Compiler: clang++
