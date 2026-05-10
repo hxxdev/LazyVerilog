@@ -1,0 +1,2 @@
+#pragma once
+// lint stub

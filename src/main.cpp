@@ -1,5 +1,7 @@
-#include <iostream>
+#include "server.hpp"
 
-using namespace std;
-
-int main() { std::cout << "Hello World!" << " "; }
+int main() {
+    LazyVerilogServer server;
+    server.run();
+    return 0;
+}
