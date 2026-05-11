@@ -10,7 +10,16 @@ std::shared_ptr<DocumentState> Analyzer::make_state(const std::string& uri,
     // when the same URI is re-parsed on didChange.
     auto tree = slang::syntax::SyntaxTree::fromText(
         std::string_view(text), std::string_view(uri));
-    return std::make_shared<DocumentState>(uri, text, std::move(tree));
+    auto state = std::make_shared<DocumentState>(uri, text, std::move(tree));
+    // Snapshot diagnostics immediately (single-threaded context).
+    // Avoids accessing tree->diagnostics() later under concurrent mimalloc activity
+    // which can corrupt slang's SmallVector internals.
+    if (state->tree) {
+        const auto& diags = state->tree->diagnostics();
+        if (diags.data() != nullptr)
+            state->parse_diagnostics.assign(diags.begin(), diags.end());
+    }
+    return state;
 }
 
 void Analyzer::open(const std::string& uri, const std::string& text) {

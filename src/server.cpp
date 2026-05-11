@@ -61,7 +61,10 @@ struct LazyVerilogServer::Impl {
         std::make_shared<lsp::ProtocolJsonHandler>();
     std::shared_ptr<GenericEndpoint> endpoint =
         std::make_shared<GenericEndpoint>(log);
-    RemoteEndPoint remote_endpoint{json_handler, endpoint, log};
+    // max_workers=1: prevents concurrent mimalloc TLS init race between Asio workers
+    // on their first allocation (didOpen vs didChangeConfiguration race).
+    RemoteEndPoint remote_endpoint{json_handler, endpoint, log,
+                                   lsp::JSONStreamStyle::Standard, 1};
     std::shared_ptr<StdOutStream> output = std::make_shared<StdOutStream>();
     std::shared_ptr<StdInStream>  input  = std::make_shared<StdInStream>();
     Condition<bool> exit_event;
@@ -207,32 +210,32 @@ void LazyVerilogServer::register_handlers() {
             if (state && state->tree) {
                 auto& sm  = state->tree->sourceManager();
                 slang::DiagnosticEngine engine(sm);
-                for (const auto& d : state->tree->diagnostics()) {
-                    lsDiagnostic ld;
-                    size_t ln = 0, col = 0;
-                    try {
-                        auto loc = d.location.valid()
-                                       ? sm.getFullyExpandedLoc(d.location)
-                                       : d.location;
-                        if (loc.valid() && sm.isFileLoc(loc)) {
-                            ln  = sm.getLineNumber(loc);
-                            col = sm.getColumnNumber(loc);
-                        }
-                    } catch (...) {}
-                    ld.range.start = lsPosition(ln  > 0 ? (int)ln  - 1 : 0,
-                                                col > 0 ? (int)col - 1 : 0);
-                    ld.range.end   = ld.range.start;
-                    auto sev = slang::getDefaultSeverity(d.code);
-                    if (sev == slang::DiagnosticSeverity::Error ||
-                        sev == slang::DiagnosticSeverity::Fatal)
-                        ld.severity = lsDiagnosticSeverity::Error;
-                    else if (sev == slang::DiagnosticSeverity::Warning)
-                        ld.severity = lsDiagnosticSeverity::Warning;
-                    else
-                        ld.severity = lsDiagnosticSeverity::Information;
-                    ld.source  = std::string("lazyverilog");
-                    ld.message = engine.formatMessage(d);
-                    notif.params.diagnostics.push_back(std::move(ld));
+                for (const auto& d : state->parse_diagnostics) {
+                        lsDiagnostic ld;
+                        size_t ln = 0, col = 0;
+                        try {
+                            auto loc = d.location.valid()
+                                           ? sm.getFullyExpandedLoc(d.location)
+                                           : d.location;
+                            if (loc.valid() && sm.isFileLoc(loc)) {
+                                ln  = sm.getLineNumber(loc);
+                                col = sm.getColumnNumber(loc);
+                            }
+                        } catch (...) {}
+                        ld.range.start = lsPosition(ln  > 0 ? (int)ln  - 1 : 0,
+                                                    col > 0 ? (int)col - 1 : 0);
+                        ld.range.end   = ld.range.start;
+                        auto sev = slang::getDefaultSeverity(d.code);
+                        if (sev == slang::DiagnosticSeverity::Error ||
+                            sev == slang::DiagnosticSeverity::Fatal)
+                            ld.severity = lsDiagnosticSeverity::Error;
+                        else if (sev == slang::DiagnosticSeverity::Warning)
+                            ld.severity = lsDiagnosticSeverity::Warning;
+                        else
+                            ld.severity = lsDiagnosticSeverity::Information;
+                        ld.source  = std::string("lazyverilog");
+                        ld.message = engine.formatMessage(d);
+                        notif.params.diagnostics.push_back(std::move(ld));
                 }
             }
             ep.sendNotification(notif);
