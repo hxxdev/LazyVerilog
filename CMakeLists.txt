@@ -124,6 +124,7 @@ set(LAZYVERILOG_TEST_SOURCES
     tests/test_autoff.cpp
     tests/test_references.cpp
     tests/test_rename.cpp
+    tests/test_definition.cpp
     # Feature sources needed by tests (no LSP protocol dependency)
     src/config.cpp
     src/analyzer.cpp

@@ -11,18 +11,20 @@ struct SymbolInfo {
     std::string name;
     std::string kind; // module, port, signal, instance, etc.
     std::string detail;
-    int         line{-1};
-    int         col{-1};
+    int line{-1};
+    int col{-1};
 };
 
 struct Location {
     std::string uri;
-    int         line{0};
-    int         col{0};
+    int line{0};
+    int col{0};
+    int end_line{0};
+    int end_col{0};
 };
 
 class Analyzer {
-public:
+  public:
     Analyzer() = default;
 
     /// Create a new DocumentState for uri with the given text.
@@ -45,12 +47,11 @@ public:
 
     /// Return all (0-based line, 0-based col) positions where `name` appears
     /// as a whole identifier in the document.
-    std::vector<std::pair<int,int>> find_occurrences(const std::string& uri,
+    std::vector<std::pair<int, int>> find_occurrences(const std::string& uri,
                                                       const std::string& name) const;
 
     /// Call f(uri, state) for every open document (under lock).
-    template<typename F>
-    void for_each_state(F&& f) const {
+    template <typename F> void for_each_state(F&& f) const {
         std::lock_guard<std::mutex> lk(map_mutex_);
         for (const auto& [uri, state] : docs_)
             f(uri, state);
@@ -62,9 +63,9 @@ public:
     /// Check mtime of extra files and re-parse if stale.
     void refresh_if_stale(const std::string& uri);
 
-private:
+  private:
     std::shared_ptr<DocumentState> make_state(const std::string& uri,
-                                               const std::string& text) const;
+                                              const std::string& text) const;
 
     mutable std::mutex map_mutex_;
     std::unordered_map<std::string, std::shared_ptr<const DocumentState>> docs_;

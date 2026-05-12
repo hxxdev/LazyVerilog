@@ -1,148 +1,151 @@
 #include "syntax_index.hpp"
-#include <algorithm>
-#include <slang/syntax/SyntaxTree.h>
 #include <slang/syntax/AllSyntax.h>
+#include <slang/syntax/SyntaxTree.h>
+#include <slang/text/SourceManager.h>
 
 using namespace slang;
 using namespace slang::syntax;
 
-static std::string tok_str(const slang::parsing::Token& t) {
-    return std::string(t.rawText());
+static std::string tok_str(const slang::parsing::Token& token) {
+    return std::string(token.valueText());
 }
 
-// Compute 1-based line number by searching for token rawText in source text.
-// search_from is updated to just after the found position (for sequential scan).
-static int tok_line(const slang::parsing::Token& t,
-                    std::string_view src,
-                    const std::vector<size_t>& line_starts,
-                    size_t& search_from) {
-    auto raw = t.rawText();
-    if (raw.empty() || src.empty()) return 0;
-    auto pos = src.find(raw, search_from);
-    if (pos == std::string_view::npos)
-        pos = src.find(raw, 0);  // fallback: search from beginning
-    if (pos == std::string_view::npos) return 0;
-    search_from = pos + raw.size();
-    auto it = std::upper_bound(line_starts.begin(), line_starts.end(), pos);
-    return (int)(it - line_starts.begin());
+static std::pair<int, int> token_pos(const slang::SourceManager& sm,
+                                     const slang::parsing::Token& token) {
+    if (!token || !token.location().valid())
+        return {0, 0};
+    const auto line = sm.getLineNumber(token.location());
+    const auto col = sm.getColumnNumber(token.location());
+    return {line > 0 ? (int)line : 0, col > 0 ? (int)col - 1 : 0};
 }
 
-static void extract_ansi_ports(const AnsiPortListSyntax& pl,
-                                std::vector<PortEntry>& ports,
-                                std::string_view src,
-                                const std::vector<size_t>& ls,
-                                size_t& sf) {
-    for (size_t i = 0; i < pl.ports.size(); ++i) {
-        const auto* mp = pl.ports[i];
-        if (!mp) continue;
+static std::string direction_of(const PortHeaderSyntax& header) {
+    if (const auto* variable = header.as_if<VariablePortHeaderSyntax>())
+        return tok_str(variable->direction);
+    if (const auto* net = header.as_if<NetPortHeaderSyntax>())
+        return tok_str(net->direction);
+    return {};
+}
 
-        if (auto* p = mp->as_if<ImplicitAnsiPortSyntax>()) {
-            PortEntry pe;
-            pe.name = tok_str(p->declarator->name);
-            pe.line = tok_line(p->declarator->name, src, ls, sf);
-            if (auto* vh = p->header->as_if<VariablePortHeaderSyntax>())
-                pe.direction = tok_str(vh->direction);
-            else if (auto* nh = p->header->as_if<NetPortHeaderSyntax>())
-                pe.direction = tok_str(nh->direction);
-            ports.push_back(std::move(pe));
-        } else if (auto* p = mp->as_if<ExplicitAnsiPortSyntax>()) {
-            PortEntry pe;
-            pe.name      = tok_str(p->name);
-            pe.direction = tok_str(p->direction);
-            pe.line      = tok_line(p->name, src, ls, sf);
-            ports.push_back(std::move(pe));
+static void add_port(std::vector<PortEntry>& ports, const slang::SourceManager& sm,
+                     const slang::parsing::Token& name, std::string direction) {
+    if (!name)
+        return;
+
+    auto [line, col] = token_pos(sm, name);
+    ports.push_back(PortEntry{
+        .name = tok_str(name),
+        .direction = std::move(direction),
+        .type = {},
+        .line = line,
+        .col = col,
+    });
+}
+
+static void extract_ansi_ports(const AnsiPortListSyntax& port_list, std::vector<PortEntry>& ports,
+                               const slang::SourceManager& sm) {
+    for (const auto* member : port_list.ports) {
+        if (!member)
+            continue;
+
+        if (const auto* implicit = member->as_if<ImplicitAnsiPortSyntax>()) {
+            add_port(ports, sm, implicit->declarator->name, direction_of(*implicit->header));
+        } else if (const auto* explicit_port = member->as_if<ExplicitAnsiPortSyntax>()) {
+            add_port(ports, sm, explicit_port->name, tok_str(explicit_port->direction));
+        }
+    }
+}
+
+static void extract_port_declarations(const SyntaxList<MemberSyntax>& members,
+                                      std::vector<PortEntry>& ports,
+                                      const slang::SourceManager& sm) {
+    for (const auto* member : members) {
+        if (!member)
+            continue;
+        const auto* declaration = member->as_if<PortDeclarationSyntax>();
+        if (!declaration)
+            continue;
+
+        const auto direction = direction_of(*declaration->header);
+        for (const auto* declarator : declaration->declarators) {
+            if (declarator)
+                add_port(ports, sm, declarator->name, direction);
         }
     }
 }
 
 static void extract_instances(const SyntaxList<MemberSyntax>& members,
-                               std::vector<InstanceEntry>& out,
-                               std::string_view src,
-                               const std::vector<size_t>& ls,
-                               size_t& sf) {
-    for (size_t i = 0; i < members.size(); ++i) {
-        const auto* m = members[i];
-        if (!m) continue;
-        if (auto* hi = m->as_if<HierarchyInstantiationSyntax>()) {
-            std::string mod = tok_str(hi->type);
-            for (size_t j = 0; j < hi->instances.size(); ++j) {
-                const auto* inst = hi->instances[j];
-                if (!inst) continue;
-                InstanceEntry ie;
-                ie.module_name = mod;
-                if (inst->decl) {
-                    ie.instance_name = tok_str(inst->decl->name);
-                    ie.line          = tok_line(inst->decl->name, src, ls, sf);
-                }
-                // Extract named port connections
-                for (size_t k = 0; k < inst->connections.size(); ++k) {
-                    const auto* pc = inst->connections[k];
-                    if (!pc) continue;
-                    if (auto* npc = pc->as_if<NamedPortConnectionSyntax>()) {
-                        NamedPortConn c;
-                        c.port_name = tok_str(npc->name);
-                        int ln = tok_line(npc->name, src, ls, sf);
-                        c.line = ln;
-                        // compute col from line start
-                        if (ln > 0 && ln <= (int)ls.size()) {
-                            auto raw = npc->name.rawText();
-                            auto pos = src.find(raw, (ln >= 1 ? ls[ln-1] : 0));
-                            if (pos != std::string_view::npos)
-                                c.col = (int)(pos - ls[ln > 0 ? ln-1 : 0]);
-                        }
-                        ie.connections.push_back(std::move(c));
-                    }
-                }
-                out.push_back(std::move(ie));
+                              std::vector<InstanceEntry>& out, const slang::SourceManager& sm) {
+    for (const auto* member : members) {
+        if (!member)
+            continue;
+        const auto* hierarchy = member->as_if<HierarchyInstantiationSyntax>();
+        if (!hierarchy)
+            continue;
+
+        const std::string module_name = tok_str(hierarchy->type);
+        for (const auto* instance : hierarchy->instances) {
+            if (!instance)
+                continue;
+
+            InstanceEntry entry;
+            entry.module_name = module_name;
+            if (instance->decl) {
+                entry.instance_name = tok_str(instance->decl->name);
+                entry.line = token_pos(sm, instance->decl->name).first;
             }
+
+            for (const auto* connection : instance->connections) {
+                if (!connection)
+                    continue;
+                const auto* named = connection->as_if<NamedPortConnectionSyntax>();
+                if (!named)
+                    continue;
+
+                auto [line, col] = token_pos(sm, named->name);
+                entry.connections.push_back(NamedPortConn{
+                    .port_name = tok_str(named->name),
+                    .line = line,
+                    .col = col,
+                });
+            }
+            out.push_back(std::move(entry));
         }
     }
 }
 
-static void process_module(const ModuleDeclarationSyntax& mod,
-                            SyntaxIndex& idx,
-                            std::string_view src,
-                            const std::vector<size_t>& ls,
-                            size_t& sf) {
-    ModuleEntry me;
-    me.name = tok_str(mod.header->name);
-    me.line = tok_line(mod.header->name, src, ls, sf);
+static void process_module(const ModuleDeclarationSyntax& module, SyntaxIndex& index,
+                           const slang::SourceManager& sm) {
+    ModuleEntry entry;
+    entry.name = tok_str(module.header->name);
+    auto [line, col] = token_pos(sm, module.header->name);
+    entry.line = line;
+    entry.col = col;
 
-    if (mod.header->ports) {
-        if (auto* apl = mod.header->ports->as_if<AnsiPortListSyntax>())
-            extract_ansi_ports(*apl, me.ports, src, ls, sf);
+    if (module.header->ports) {
+        if (const auto* ansi = module.header->ports->as_if<AnsiPortListSyntax>())
+            extract_ansi_ports(*ansi, entry.ports, sm);
     }
-
-    extract_instances(mod.members, idx.instances, src, ls, sf);
-    idx.modules.push_back(std::move(me));
+    extract_port_declarations(module.members, entry.ports, sm);
+    extract_instances(module.members, index.instances, sm);
+    index.modules.push_back(std::move(entry));
 }
 
-static std::vector<size_t> build_line_starts(std::string_view src) {
-    std::vector<size_t> ls;
-    ls.push_back(0);
-    for (size_t i = 0; i < src.size(); ++i)
-        if (src[i] == '\n') ls.push_back(i + 1);
-    return ls;
-}
-
-SyntaxIndex SyntaxIndex::build(const slang::syntax::SyntaxTree& tree,
-                                std::string_view source) {
-    SyntaxIndex idx;
-    auto ls = build_line_starts(source);
-    size_t sf = 0;  // sequential search cursor
-
+SyntaxIndex SyntaxIndex::build(const slang::syntax::SyntaxTree& tree, std::string_view) {
+    SyntaxIndex index;
+    const auto& sm = tree.sourceManager();
     const auto& root = tree.root();
 
-    if (const auto* cu = root.as_if<CompilationUnitSyntax>()) {
-        for (size_t i = 0; i < cu->members.size(); ++i) {
-            const auto* m = cu->members[i];
-            if (!m) continue;
-            if (auto* mod = m->as_if<ModuleDeclarationSyntax>())
-                process_module(*mod, idx, source, ls, sf);
+    if (const auto* compilation_unit = root.as_if<CompilationUnitSyntax>()) {
+        for (const auto* member : compilation_unit->members) {
+            if (!member)
+                continue;
+            if (const auto* module = member->as_if<ModuleDeclarationSyntax>())
+                process_module(*module, index, sm);
         }
-    } else if (auto* mod = root.as_if<ModuleDeclarationSyntax>()) {
-        process_module(*mod, idx, source, ls, sf);
+    } else if (const auto* module = root.as_if<ModuleDeclarationSyntax>()) {
+        process_module(*module, index, sm);
     }
 
-    return idx;
+    return index;
 }
