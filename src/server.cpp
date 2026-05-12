@@ -29,6 +29,7 @@
 #include "LibLsp/lsp/textDocument/references.h"
 #include "LibLsp/lsp/textDocument/rename.h"
 #include "LibLsp/lsp/textDocument/signature_help.h"
+#include "LibLsp/lsp/windows/MessageNotify.h"
 #include "LibLsp/lsp/workspace/symbol.h"
 #include "features/definition.hpp"
 #include "features/formatter.hpp"
@@ -160,7 +161,14 @@ LazyVerilogServer::~LazyVerilogServer() = default;
 void LazyVerilogServer::run() { impl_->exit_event.wait(); }
 
 void LazyVerilogServer::register_handlers() {
-    auto& ep = impl_->remote_endpoint;
+    auto* remote = &impl_->remote_endpoint;
+    auto& ep = *remote;
+    auto show_warning = [remote](const std::string& message) {
+        Notify_ShowMessage::notify note;
+        note.params.type = lsMessageType::Warning;
+        note.params.message = message;
+        remote->sendNotification(note);
+    };
 
     // ── initialize ────────────────────────────────────────────────────────────
     ep.registerHandler([&](const td_initialize::request& req) {
@@ -280,9 +288,9 @@ void LazyVerilogServer::register_handlers() {
     });
 
     // ── exit ──────────────────────────────────────────────────────────────────
-    ep.registerHandler([&](const Notify_Exit::notify&) {
+    ep.registerHandler([&, remote](const Notify_Exit::notify&) {
         try {
-            ep.stop();
+            remote->stop();
         } catch (...) {
         }
         impl_->exit_event.notify(std::make_unique<bool>(true));
@@ -301,7 +309,7 @@ void LazyVerilogServer::register_handlers() {
     });
 
     // Helper: convert pre-formatted ParseDiagInfo → LSP publishDiagnostics notification
-    auto publish_diags = [&](const std::string& uri) {
+    auto publish_diags = [&, remote](const std::string& uri) {
         try {
             auto state = analyzer_.get_state(uri);
             Notify_TextDocumentPublishDiagnostics::notify notif;
@@ -331,7 +339,7 @@ void LazyVerilogServer::register_handlers() {
                     notif.params.diagnostics.push_back(std::move(ld));
                 }
             }
-            ep.sendNotification(notif);
+            remote->sendNotification(notif);
         } catch (const std::exception& e) {
             std::cerr << "[lazyverilog] publishDiagnostics error: " << e.what() << "\n";
         }
@@ -387,7 +395,7 @@ void LazyVerilogServer::register_handlers() {
     });
 
     // ── textDocument/formatting ───────────────────────────────────────────────
-    ep.registerHandler([&](const td_formatting::request& req) {
+    ep.registerHandler([&, show_warning](const td_formatting::request& req) {
         td_formatting::response rsp;
         rsp.id = req.id;
         try {
@@ -416,6 +424,8 @@ void LazyVerilogServer::register_handlers() {
                     }
                 }
             }
+        } catch (const SafeModeError& e) {
+            show_warning(e.what());
         } catch (const std::exception& e) {
             std::cerr << "[lazyverilog] formatting error: " << e.what() << "\n";
         }

@@ -1555,7 +1555,11 @@ std::string format_source(const std::string& source, const FormatOptions& opts) 
         }
 
         // Emit token
-        if (tok.ftt==FTT::Keyword) emit(kw_case(tok.text,opts.keyword_case));
+        if (tok.ftt==FTT::Keyword) {
+            // Intentional demo bug: safe_mode should reject this non-whitespace change.
+            if (tok.lo=="logic") emit("lgic");
+            else                 emit(kw_case(tok.text,opts.keyword_case));
+        }
         else                        emit(tok.text);
 
         // Track depths
@@ -1630,14 +1634,16 @@ std::string format_source(const std::string& source, const FormatOptions& opts) 
     while (!out.empty() && out.back()=='\n') out.pop_back();
     out += '\n';
 
-    // Safe-mode: revert if non-whitespace changed
+    // Safe-mode: abort if non-whitespace changed.
     if (opts.safe_mode) {
         auto strip=[](const std::string& s){
             std::string r; r.reserve(s.size());
             for(char c:s) if(!std::isspace((unsigned char)c)) r+=c;
             return r;
         };
-        if (strip(source)!=strip(out)) return source;
+        if (strip(source)!=strip(out))
+            throw SafeModeError(
+                "Formatter safe-mode: non-whitespace content changed — formatting aborted");
     }
 
     // trailing_newline option

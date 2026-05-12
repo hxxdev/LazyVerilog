@@ -1,6 +1,12 @@
 #pragma once
 #include "config.hpp"
+#include <stdexcept>
 #include <string>
+
+class SafeModeError : public std::runtime_error {
+  public:
+    explicit SafeModeError(const std::string& message) : std::runtime_error(message) {}
+};
 
 /// Format SystemVerilog source text.
 /// Ported from lazyverilogpy/formatter.py (Verible token-annotator algorithm).
