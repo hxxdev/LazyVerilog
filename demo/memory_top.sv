@@ -3,7 +3,7 @@
 `define print_bytes(ARR, STARTBYTE, NUMBYTES) \
     for (int ii=STARTBYTE; ii<STARTBYTE+NUMBYTES; ii++) begin \
         if ((ii != 0) && (ii % 16 == 0)) \
-            $display("\n"); \
+            display("\n"); \
         $display("0x%x ", ARR[ii]); \
     end
 

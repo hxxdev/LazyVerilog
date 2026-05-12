@@ -18,6 +18,7 @@ public:
 private:
     void register_handlers();
 
+    std::filesystem::path root_;
     Config   config_;
     Analyzer analyzer_;
 

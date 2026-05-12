@@ -30,6 +30,9 @@
 #include "LibLsp/lsp/textDocument/inlayHint.h"
 #include "LibLsp/lsp/workspace/symbol.h"
 #include "syntax_index.hpp"
+#include "features/lint.hpp"
+#include "features/formatter.hpp"
+#include "LibLsp/lsp/textDocument/formatting.h"
 #include <slang/syntax/SyntaxTree.h>
 
 #include <iostream>
@@ -44,6 +47,38 @@ struct StdInStream : lsp::base_istream<std::istream> {
     explicit StdInStream() : base_istream<std::istream>(std::cin) {}
     std::string what() override { return {}; }
 };
+
+// ── Incremental-sync helpers ──────────────────────────────────────────────────
+
+// Convert (line, col) LSP position to byte offset in text.
+static size_t lsp_offset(const std::string& text, int line, int col) {
+    int cur = 0;
+    size_t pos = 0;
+    while (pos < text.size() && cur < line) {
+        if (text[pos] == '\n') ++cur;
+        ++pos;
+    }
+    size_t line_start = pos;
+    // Advance col UTF-16 code units (treat ASCII; multi-byte clamps gracefully)
+    while (pos < text.size() && text[pos] != '\n' && (int)(pos - line_start) < col)
+        ++pos;
+    return pos;
+}
+
+static std::string apply_incremental_change(std::string text,
+                                            const lsTextDocumentContentChangeEvent& chg) {
+    if (!chg.range)
+        return chg.text; // full-document replacement fallback
+    size_t start = lsp_offset(text, chg.range->start.line, chg.range->start.character);
+    size_t end   = lsp_offset(text, chg.range->end.line,   chg.range->end.character);
+    if (start > text.size()) start = text.size();
+    if (end   > text.size()) end   = text.size();
+    if (start > end)         start = end;
+    text.replace(start, end - start, chg.text);
+    return text;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 struct StderrLog : public lsp::Log {
     void log(Level, std::wstring&& msg) override { std::wcerr << msg << L"\n"; }
@@ -68,7 +103,8 @@ struct LazyVerilogServer::Impl {
 };
 
 LazyVerilogServer::LazyVerilogServer() : impl_(std::make_unique<Impl>()) {
-    config_ = load_config(std::filesystem::current_path());
+    root_ = std::filesystem::current_path();
+    config_ = load_config(root_);
     register_handlers();
     impl_->remote_endpoint.startProcessingMessages(impl_->input, impl_->output);
 }
@@ -131,6 +167,19 @@ void LazyVerilogServer::register_handlers() {
             caps.codeActionProvider =
                 std::make_pair(optional<bool>(true), optional<CodeActionOptions>{});
 
+            // Extract workspace root from initialize params
+            auto uri_to_path = [](const std::string& uri) -> std::filesystem::path {
+                if (uri.starts_with("file://")) return {uri.substr(7)};
+                return {uri};
+            };
+            if (req.params.rootUri && !req.params.rootUri->raw_uri_.empty()) {
+                auto p = uri_to_path(req.params.rootUri->raw_uri_);
+                if (std::filesystem::exists(p)) { root_ = p; config_ = load_config(root_); }
+            } else if (req.params.rootPath && !req.params.rootPath->empty()) {
+                std::filesystem::path p(*req.params.rootPath);
+                if (std::filesystem::exists(p)) { root_ = p; config_ = load_config(root_); }
+            }
+
             // Inlay hints
             caps.inlayHintProvider =
                 std::make_pair(optional<bool>(config_.inlay_hint.enable),
@@ -191,7 +240,7 @@ void LazyVerilogServer::register_handlers() {
     ep.registerHandler([&](const Notify_WorkspaceDidChangeConfiguration::notify& note) {
         try {
             // Re-read config from disk on every configuration change
-            config_ = load_config(std::filesystem::current_path());
+            config_ = load_config(root_);
             (void)note; // settings in note.params.settings parsed lazily
         } catch (const std::exception& e) {
             std::cerr << "[lazyverilog] didChangeConfiguration error: " << e.what() << "\n";
@@ -205,7 +254,12 @@ void LazyVerilogServer::register_handlers() {
             Notify_TextDocumentPublishDiagnostics::notify notif;
             notif.params.uri.raw_uri_ = uri;
             if (state) {
-                for (const auto& d : state->parse_diagnostics) {
+                // Merge parse diagnostics + lint diagnostics
+                auto all_diags = state->parse_diagnostics;
+                auto lint_diags = run_lint(*state, config_.lint);
+                all_diags.insert(all_diags.end(),
+                                 lint_diags.begin(), lint_diags.end());
+                for (const auto& d : all_diags) {
                     lsDiagnostic ld;
                     ld.range.start = lsPosition(d.line, d.col);
                     ld.range.end   = ld.range.start;
@@ -229,6 +283,13 @@ void LazyVerilogServer::register_handlers() {
     ep.registerHandler([&, publish_diags](const Notify_TextDocumentDidOpen::notify& note) {
         try {
             const auto& td = note.params.textDocument;
+            // Walk up from file to find lazyverilog.toml if not already found
+            if (!std::filesystem::exists(root_ / "lazyverilog.toml")) {
+                auto uri = td.uri.raw_uri_;
+                if (uri.starts_with("file://")) uri = uri.substr(7);
+                auto found = find_config_root(uri);
+                if (!found.empty()) { root_ = found; config_ = load_config(root_); }
+            }
             analyzer_.open(td.uri.raw_uri_, td.text);
             publish_diags(td.uri.raw_uri_);
         } catch (const std::exception& e) {
@@ -241,8 +302,11 @@ void LazyVerilogServer::register_handlers() {
         try {
             const auto& uri = note.params.textDocument.uri.raw_uri_;
             if (!note.params.contentChanges.empty()) {
-                const auto& last = note.params.contentChanges.back();
-                analyzer_.change(uri, last.text);
+                auto state = analyzer_.get_state(uri);
+                std::string text = state ? state->text : "";
+                for (const auto& chg : note.params.contentChanges)
+                    text = apply_incremental_change(std::move(text), chg);
+                analyzer_.change(uri, text);
             }
             publish_diags(uri);
         } catch (const std::exception& e) {
@@ -257,6 +321,39 @@ void LazyVerilogServer::register_handlers() {
         } catch (const std::exception& e) {
             std::cerr << "[lazyverilog] didClose error: " << e.what() << "\n";
         }
+    });
+
+    // ── textDocument/formatting ───────────────────────────────────────────────
+    ep.registerHandler([&](const td_formatting::request& req) {
+        td_formatting::response rsp;
+        rsp.id = req.id;
+        try {
+            if (config_.format.enable_format_on_save) {
+                const auto& uri = req.params.textDocument.uri.raw_uri_;
+                auto state = analyzer_.get_state(uri);
+                if (state) {
+                    std::string formatted = format_source(state->text, config_.format);
+                    if (formatted != state->text) {
+                        // Replace the entire document with one edit
+                        lsTextEdit edit;
+                        // Count lines in original
+                        int line_count = 0;
+                        int last_nl = -1;
+                        for (int k = 0; k < (int)state->text.size(); ++k) {
+                            if (state->text[k] == '\n') { ++line_count; last_nl = k; }
+                        }
+                        int last_line_len = (int)state->text.size() - last_nl - 1;
+                        edit.range.start = lsPosition(0, 0);
+                        edit.range.end   = lsPosition(line_count, last_line_len);
+                        edit.newText = formatted;
+                        rsp.result.push_back(std::move(edit));
+                    }
+                }
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "[lazyverilog] formatting error: " << e.what() << "\n";
+        }
+        return rsp;
     });
 
     // ── textDocument/hover ────────────────────────────────────────────────────

@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 
+#include <slang/text/SourceManager.h>
+
 // Forward declarations from slang
 namespace slang::syntax { class SyntaxTree; }
 namespace slang::ast { class Compilation; }
@@ -24,6 +26,8 @@ struct ParseDiagInfo {
 struct DocumentState {
     std::string uri;
     std::string text;
+    // source_manager must outlive tree (SyntaxTree holds SourceManager&).
+    std::unique_ptr<slang::SourceManager> source_manager;
     std::shared_ptr<slang::syntax::SyntaxTree> tree;
     // Pre-formatted diagnostics extracted in make_state() while the
     // SyntaxTree and its arena allocators are still alive.

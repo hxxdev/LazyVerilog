@@ -24,9 +24,7 @@ TEST_CASE("config: missing file returns defaults", "[config]") {
     CHECK(cfg.perf.nice_value == 10);
     CHECK(cfg.perf.log_timing == false);
     CHECK(cfg.inlay_hint.enable == true);
-    CHECK(cfg.format.indent_module_body == true);
-    CHECK(cfg.format.indent_width == 4);
-    CHECK(cfg.format.use_spaces == true);
+    CHECK(cfg.format.indent_size == 2);
     CHECK(cfg.format.trailing_newline == true);
     CHECK(cfg.lint.case_missing_default == false);
     CHECK(cfg.lint.register_naming == false);
@@ -64,11 +62,38 @@ log_timing = true
 enable = false
 
 [format]
-indent_module_body = false
-align_port_declarations = true
-indent_width = 2
-use_spaces = false
+indent_size = 4
 trailing_newline = false
+keyword_case = "lower"
+blank_lines_between_items = 2
+default_indent_level_inside_module_block = 0
+compact_indexing_and_selections = false
+safe_mode = true
+tab_align = false
+align_punctuation = true
+
+[format.statement]
+align = true
+lhs_min_width = 8
+wrap_end_else_clauses = true
+
+[format.port_declaration]
+align = true
+section1_min_width = 6
+section2_min_width = 20
+
+[format.var_declaration]
+align = true
+section1_min_width = 10
+
+[format.instance]
+align = true
+port_indent_level = 2
+instance_port_name_width = 12
+
+[format.port]
+non_ansi_port_per_line_enabled = true
+non_ansi_port_per_line = 4
 
 [lint]
 case_missing_default = true
@@ -99,11 +124,33 @@ autoarg_on_save = true
 
     CHECK(cfg.inlay_hint.enable == false);
 
-    CHECK(cfg.format.indent_module_body == false);
-    CHECK(cfg.format.align_port_declarations == true);
-    CHECK(cfg.format.indent_width == 2);
-    CHECK(cfg.format.use_spaces == false);
+    CHECK(cfg.format.indent_size == 4);
     CHECK(cfg.format.trailing_newline == false);
+    CHECK(cfg.format.keyword_case == "lower");
+    CHECK(cfg.format.blank_lines_between_items == 2);
+    CHECK(cfg.format.default_indent_level_inside_module_block == 0);
+    CHECK(cfg.format.compact_indexing_and_selections == false);
+    CHECK(cfg.format.safe_mode == true);
+    CHECK(cfg.format.tab_align == false);
+    CHECK(cfg.format.align_punctuation == true);
+
+    CHECK(cfg.format.statement.align == true);
+    CHECK(cfg.format.statement.lhs_min_width == 8);
+    CHECK(cfg.format.statement.wrap_end_else_clauses == true);
+
+    CHECK(cfg.format.port_declaration.align == true);
+    CHECK(cfg.format.port_declaration.section1_min_width == 6);
+    CHECK(cfg.format.port_declaration.section2_min_width == 20);
+
+    CHECK(cfg.format.var_declaration.align == true);
+    CHECK(cfg.format.var_declaration.section1_min_width == 10);
+
+    CHECK(cfg.format.instance.align == true);
+    CHECK(cfg.format.instance.port_indent_level == 2);
+    CHECK(cfg.format.instance.instance_port_name_width == 12);
+
+    CHECK(cfg.format.port.non_ansi_port_per_line_enabled == true);
+    CHECK(cfg.format.port.non_ansi_port_per_line == 4);
 
     CHECK(cfg.lint.case_missing_default == true);
     CHECK(cfg.lint.functions_automatic == true);
@@ -122,7 +169,6 @@ TEST_CASE("config: malformed TOML returns defaults", "[config]") {
     auto dir = make_temp_toml("this is not valid toml @@@ !!!");
     Config cfg;
     REQUIRE_NOTHROW(cfg = load_config(dir));
-    // Defaults preserved on parse error
     CHECK(cfg.perf.background_compilation == false);
-    CHECK(cfg.format.indent_width == 4);
+    CHECK(cfg.format.indent_size == 2);
 }

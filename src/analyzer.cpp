@@ -2,6 +2,7 @@
 #include "syntax_index.hpp"
 #include <algorithm>
 #include <cctype>
+#include <memory>
 #include <slang/diagnostics/DiagnosticEngine.h>
 #include <slang/syntax/SyntaxTree.h>
 #include <slang/text/SourceManager.h>
@@ -14,10 +15,17 @@ std::shared_ptr<DocumentState> Analyzer::make_state(const std::string& uri,
     std::string path = uri;
     if (path.starts_with("file://"))
         path = path.substr(7);
+    // Fresh SourceManager per document snapshot: avoids "path already assigned"
+    // errors when the same file is re-parsed on didChange, and prevents the
+    // static singleton from accumulating stale buffers across edits.
+    auto sm = std::make_unique<slang::SourceManager>();
     auto tree = slang::syntax::SyntaxTree::fromText(std::string_view(text),
+                                                    *sm,
                                                     std::string_view(uri),
                                                     std::string_view(path));
-    auto state = std::make_shared<DocumentState>(uri, text, std::move(tree));
+    auto state = std::make_shared<DocumentState>(uri, text, nullptr);
+    state->source_manager = std::move(sm);
+    state->tree = std::move(tree);
     // Format diagnostics immediately while the SyntaxTree arena is alive.
     // Do NOT copy slang::Diagnostic objects — their ConstantValue args can
     // contain internal pointers that are not safely copyable.

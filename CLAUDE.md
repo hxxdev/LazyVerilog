@@ -1,9 +1,5 @@
 # CLAUDE.md
-
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
 ## Build
-
 ```bash
 # Configure (run once; slang must already be installed system-wide)
 cmake -B build -DCMAKE_BUILD_TYPE=Debug
@@ -11,40 +7,28 @@ cmake -B build -DCMAKE_BUILD_TYPE=Debug
 # Build server + tests
 cmake --build build -j$(nproc)
 ```
-
 `slang` is found via `find_package(slang REQUIRED)` — it must be installed before configuring.
 `fmt` v11 is fetched by CMake (do not use system fmt; ABI mismatch with slang).
 `LspCpp` lives as a submodule at `external/LspCpp` with standalone Asio (no Boost).
-
 ## Run tests
-
 ```bash
 # All tests
 ctest --test-dir build
-
 # Single test file (by tag)
 ./build/lazyverilog-tests "[config]"
-
 # Single named test
 ./build/lazyverilog-tests "config: missing file returns defaults"
 ```
-
 Tests use Catch2 v3 (`REQUIRE`/`CHECK`, tag-based filtering). `tests/test_main.cpp` is a placeholder; each feature has its own `test_*.cpp`.
-
 ## Run server
-
 ```bash
 ./build/lazyverilog-lsp   # communicates via stdin/stdout JSON-RPC
 ```
-
-Config is loaded from `lazyverilog.toml` in the working directory at startup and on every `workspace/didChangeConfiguration` notification.
+Config is loaded from `lazyverilog.toml` by walking up from the opened file's directory. Falls back to `rootUri` from the LSP `initialize` request, then `current_path()`. Reloaded on every `workspace/didChangeConfiguration` notification.
 
 ## End-to-end LSP test via nvim
-
 Test that the server attaches and publishes diagnostics without crashing:
-
 ```bash
-# Must run from repo root (cd /home/hxxdev/dev/LazyVerilog first).
 # Prints vim.diagnostic.get(0) after 3 s.
 nvim --headless demo/memory_top.sv \
   "+lua vim.defer_fn(function() print(vim.inspect(vim.diagnostic.get(0))) end, 3000)" \
