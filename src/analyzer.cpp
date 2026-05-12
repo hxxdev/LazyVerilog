@@ -8,9 +8,15 @@
 
 std::shared_ptr<DocumentState> Analyzer::make_state(const std::string& uri,
                                                     const std::string& text) const {
-    // Use name-only overload; no path to avoid SourceManager path-uniqueness conflicts
-    // when the same URI is re-parsed on didChange.
-    auto tree = slang::syntax::SyntaxTree::fromText(std::string_view(text), std::string_view(uri));
+    // Pass URI as name (display label) and stripped filesystem path as path
+    // (used by SourceManager::assignText for include resolution relative to
+    // the file's directory, not the server CWD).
+    std::string path = uri;
+    if (path.starts_with("file://"))
+        path = path.substr(7);
+    auto tree = slang::syntax::SyntaxTree::fromText(std::string_view(text),
+                                                    std::string_view(uri),
+                                                    std::string_view(path));
     auto state = std::make_shared<DocumentState>(uri, text, std::move(tree));
     // Format diagnostics immediately while the SyntaxTree arena is alive.
     // Do NOT copy slang::Diagnostic objects — their ConstantValue args can
