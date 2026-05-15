@@ -92,7 +92,7 @@ std::vector<CodeAction> provide_code_actions(const Analyzer& analyzer, const Con
     // Build index once; shared by autoinst and autowire
     SyntaxIndex idx;
     if (state->tree) {
-        idx = SyntaxIndex::build(*state->tree, state->text);
+        idx = state->index;
         analyzer.merge_extra_file_modules(idx);
     }
 

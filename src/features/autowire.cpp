@@ -1,10 +1,10 @@
 #include "autowire.hpp"
+#include <algorithm>
+#include <set>
 #include <slang/syntax/AllSyntax.h>
 #include <slang/syntax/SyntaxTree.h>
 #include <slang/syntax/SyntaxVisitor.h>
 #include <slang/text/SourceManager.h>
-#include <algorithm>
-#include <set>
 
 using namespace slang;
 using namespace slang::syntax;
@@ -29,10 +29,13 @@ static std::vector<std::string> split_lines(const std::string& text) {
 }
 
 static bool is_simple_id(const std::string& s) {
-    if (s.empty()) return false;
-    if (!std::isalpha((unsigned char)s[0]) && s[0] != '_') return false;
+    if (s.empty())
+        return false;
+    if (!std::isalpha((unsigned char)s[0]) && s[0] != '_')
+        return false;
     for (char c : s)
-        if (!std::isalnum((unsigned char)c) && c != '_') return false;
+        if (!std::isalnum((unsigned char)c) && c != '_')
+            return false;
     return true;
 }
 
@@ -44,27 +47,31 @@ struct DeclCollector : public SyntaxVisitor<DeclCollector> {
     void handle(const DataDeclarationSyntax& node) {
         for (uint32_t i = 0; i < node.declarators.size(); ++i) {
             const auto* d = node.declarators[i];
-            if (d) declared.insert(std::string(d->name.valueText()));
+            if (d)
+                declared.insert(std::string(d->name.valueText()));
         }
         visitDefault(node);
     }
     void handle(const NetDeclarationSyntax& node) {
         for (uint32_t i = 0; i < node.declarators.size(); ++i) {
             const auto* d = node.declarators[i];
-            if (d) declared.insert(std::string(d->name.valueText()));
+            if (d)
+                declared.insert(std::string(d->name.valueText()));
         }
         visitDefault(node);
     }
     void handle(const PortDeclarationSyntax& node) {
         for (uint32_t i = 0; i < node.declarators.size(); ++i) {
             const auto* d = node.declarators[i];
-            if (d) declared.insert(std::string(d->name.valueText()));
+            if (d)
+                declared.insert(std::string(d->name.valueText()));
         }
         visitDefault(node);
     }
     void handle(const ParameterDeclarationSyntax& node) {
         for (const auto* declarator : node.declarators) {
-            if (declarator) declared.insert(std::string(declarator->name.valueText()));
+            if (declarator)
+                declared.insert(std::string(declarator->name.valueText()));
         }
         visitDefault(node);
     }
@@ -83,11 +90,14 @@ struct AssignLhsCollector : public SyntaxVisitor<AssignLhsCollector> {
     void handle(const ContinuousAssignSyntax& node) {
         for (uint32_t i = 0; i < node.assignments.size(); ++i) {
             const auto* expr = node.assignments[i];
-            if (!expr) continue;
+            if (!expr)
+                continue;
             const auto* assign = expr->as_if<BinaryExpressionSyntax>();
-            if (!assign || assign->kind != SyntaxKind::AssignmentExpression) continue;
+            if (!assign || assign->kind != SyntaxKind::AssignmentExpression)
+                continue;
             const auto* id = assign->left->as_if<IdentifierNameSyntax>();
-            if (!id) continue;
+            if (!id)
+                continue;
             std::string name = std::string(id->identifier.valueText());
             if (is_simple_id(name))
                 signals.push_back(name);
@@ -135,9 +145,7 @@ struct InstSignal {
     int order;
 };
 
-static std::vector<InstSignal> collect_inst_signals(
-    const SyntaxIndex& syntax_index)
-{
+static std::vector<InstSignal> collect_inst_signals(const SyntaxIndex& syntax_index) {
     std::vector<InstSignal> results;
     std::set<std::string> seen;
     int order = 0;
@@ -145,40 +153,42 @@ static std::vector<InstSignal> collect_inst_signals(
     for (const auto& inst : syntax_index.instances) {
         // Find module definition for port info
         const ModuleEntry* mod_entry = nullptr;
-        for (const auto& m : syntax_index.modules) {
-            if (m.name == inst.module_name) {
-                mod_entry = &m;
-                break;
-            }
-        }
+        auto module_it = syntax_index.module_by_name.find(inst.module_name);
+        if (module_it != syntax_index.module_by_name.end() &&
+            module_it->second < syntax_index.modules.size())
+            mod_entry = &syntax_index.modules[module_it->second];
 
         for (const auto& conn : inst.connections) {
             std::string port_name = conn.port_name;
             std::string signal = conn.signal_name;
-            if (!is_simple_id(signal)) continue;
-            if (seen.count(signal)) continue;
+            if (!is_simple_id(signal))
+                continue;
+            if (seen.count(signal))
+                continue;
 
-                // Look up port direction
+            // Look up port direction
             std::string direction;
             std::string type_kw = "logic";
             std::string dimension;
             if (mod_entry) {
-                for (const auto& p : mod_entry->ports) {
-                    if (p.name == port_name) {
-                        direction = p.direction;
-                        auto lb = p.type.find('[');
-                        auto rb = p.type.rfind(']');
-                        if (lb != std::string::npos && rb != std::string::npos && lb < rb)
-                            dimension = p.type.substr(lb, rb - lb + 1);
-                        break;
-                    }
+                auto port_it = mod_entry->port_by_name.find(port_name);
+                if (port_it != mod_entry->port_by_name.end() &&
+                    port_it->second < mod_entry->ports.size()) {
+                    const auto& p = mod_entry->ports[port_it->second];
+                    direction = p.direction;
+                    auto lb = p.type.find('[');
+                    auto rb = p.type.rfind(']');
+                    if (lb != std::string::npos && rb != std::string::npos && lb < rb)
+                        dimension = p.type.substr(lb, rb - lb + 1);
                 }
             }
 
             // Only include output/inout ports
-            if (direction == "input") continue;
+            if (direction == "input")
+                continue;
             if (!direction.empty() && direction != "output" && direction != "inout" &&
-                direction != "out" && direction != "Out") continue;
+                direction != "out" && direction != "Out")
+                continue;
 
             seen.insert(signal);
             results.push_back({signal, inst.module_name, type_kw, dimension, order++});
@@ -200,7 +210,8 @@ struct InsertionLineFinder : public SyntaxVisitor<InsertionLineFinder> {
     explicit InsertionLineFinder(const SourceManager& sm) : sm(sm) {}
 
     int token_line(const slang::parsing::Token& tok) const {
-        if (!tok || !tok.location().valid()) return 0;
+        if (!tok || !tok.location().valid())
+            return 0;
         auto line = sm.getLineNumber(tok.location());
         return line > 0 ? (int)line - 1 : 0;
     }
@@ -221,18 +232,21 @@ struct InsertionLineFinder : public SyntaxVisitor<InsertionLineFinder> {
     }
     void handle(const HierarchyInstantiationSyntax& node) {
         int line = token_line(node.getFirstToken());
-        if (first_inst < 0 || line < first_inst) first_inst = line;
+        if (first_inst < 0 || line < first_inst)
+            first_inst = line;
         visitDefault(node);
     }
     void handle(const ProceduralBlockSyntax& node) {
         int line = token_line(node.keyword);
-        if (first_proc < 0 || line < first_proc) first_proc = line;
+        if (first_proc < 0 || line < first_proc)
+            first_proc = line;
         visitDefault(node);
     }
 };
 
 static int find_insertion_line(const DocumentState& state) {
-    if (!state.tree) return 0;
+    if (!state.tree)
+        return 0;
     InsertionLineFinder finder(state.tree->sourceManager());
     state.tree->root().visit(finder);
     if (finder.last_decl >= 0)
@@ -257,7 +271,8 @@ struct SignalDecl {
 static std::string format_one_decl(const SignalDecl& s, size_t max_dim_len) {
     if (!s.dimension.empty()) {
         std::string dim_part = s.dimension;
-        while (dim_part.size() < max_dim_len) dim_part += ' ';
+        while (dim_part.size() < max_dim_len)
+            dim_part += ' ';
         return s.type_kw + " " + dim_part + " " + s.name + ";";
     } else if (max_dim_len > 0) {
         std::string pad(max_dim_len, ' ');
@@ -268,14 +283,16 @@ static std::string format_one_decl(const SignalDecl& s, size_t max_dim_len) {
 }
 
 static std::string format_declarations(const std::vector<SignalDecl>& signals) {
-    if (signals.empty()) return {};
+    if (signals.empty())
+        return {};
     size_t max_dim_len = 0;
     for (const auto& s : signals)
         max_dim_len = std::max(max_dim_len, s.dimension.size());
 
     std::string out;
     for (size_t i = 0; i < signals.size(); ++i) {
-        if (i > 0) out += "\n";
+        if (i > 0)
+            out += "\n";
         out += format_one_decl(signals[i], max_dim_len);
     }
     return out;
@@ -283,9 +300,8 @@ static std::string format_declarations(const std::vector<SignalDecl>& signals) {
 
 // ── Main entry points ─────────────────────────────────────────────────────────
 
-static std::vector<SignalDecl> compute_new_signals(
-    const DocumentState& state, const SyntaxIndex& syntax_index)
-{
+static std::vector<SignalDecl> compute_new_signals(const DocumentState& state,
+                                                   const SyntaxIndex& syntax_index) {
     if (!state.tree)
         return {};
 
@@ -334,16 +350,13 @@ static std::vector<SignalDecl> compute_new_signals(
     }
 
     // Sort by order
-    std::sort(result.begin(), result.end(), [](const SignalDecl& a, const SignalDecl& b) {
-        return a.order < b.order;
-    });
+    std::sort(result.begin(), result.end(),
+              [](const SignalDecl& a, const SignalDecl& b) { return a.order < b.order; });
     return result;
 }
 
-std::string autowire_apply(
-    const DocumentState& state, const SyntaxIndex& syntax_index,
-    const AutowireOptions& /*options*/)
-{
+std::string autowire_apply(const DocumentState& state, const SyntaxIndex& syntax_index,
+                           const AutowireOptions& /*options*/) {
     auto new_sigs = compute_new_signals(state, syntax_index);
     if (new_sigs.empty())
         return state.text;
@@ -361,23 +374,24 @@ std::string autowire_apply(
 
     std::string result;
     for (size_t i = 0; i < out_lines.size(); ++i) {
-        if (i > 0) result += "\n";
+        if (i > 0)
+            result += "\n";
         result += out_lines[i];
     }
     return result;
 }
 
-std::vector<std::string> autowire_preview(
-    const DocumentState& state, const SyntaxIndex& syntax_index,
-    const AutowireOptions& /*options*/)
-{
+std::vector<std::string> autowire_preview(const DocumentState& state,
+                                          const SyntaxIndex& syntax_index,
+                                          const AutowireOptions& /*options*/) {
     auto new_sigs = compute_new_signals(state, syntax_index);
     std::vector<std::string> out;
     if (!new_sigs.empty()) {
         out.push_back("Will add:");
         for (const auto& s : new_sigs) {
             std::string line = "  " + s.type_kw;
-            if (!s.dimension.empty()) line += " " + s.dimension;
+            if (!s.dimension.empty())
+                line += " " + s.dimension;
             line += " " + s.name + ";";
             out.push_back(line);
         }

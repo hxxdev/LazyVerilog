@@ -201,6 +201,9 @@ static void process_module(const ModuleDeclarationSyntax& module, SyntaxIndex& i
     }
     extract_port_declarations(module.members, entry.ports, sm);
     extract_instances(module.members, index.instances, sm, source);
+    for (size_t i = 0; i < entry.ports.size(); ++i)
+        entry.port_by_name.try_emplace(entry.ports[i].name, i);
+    index.module_by_name.try_emplace(entry.name, index.modules.size());
     index.modules.push_back(std::move(entry));
 }
 

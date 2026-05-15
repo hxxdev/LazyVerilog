@@ -1,10 +1,12 @@
 #include "analyzer.hpp"
-#include "syntax_index.hpp"
 #include <algorithm>
 #include <cctype>
+#include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <iostream>
 #include <memory>
 #include <set>
 #include <slang/diagnostics/DiagnosticEngine.h>
@@ -13,8 +15,28 @@
 #include <slang/syntax/SyntaxVisitor.h>
 #include <slang/text/SourceManager.h>
 
+namespace {
+
+bool perf_trace_enabled() {
+    const char* value = std::getenv("LAZYVERILOG_TRACE_PERF");
+    return value && *value && std::string_view(value) != "0";
+}
+
+using Clock = std::chrono::steady_clock;
+
+void log_perf(std::string_view label, Clock::time_point start) {
+    if (!perf_trace_enabled())
+        return;
+    const auto elapsed =
+        std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - start);
+    std::cerr << "[lazyverilog][perf] " << label << ": " << elapsed.count() << "us\n";
+}
+
+} // namespace
+
 std::shared_ptr<DocumentState> Analyzer::make_state(const std::string& uri,
                                                     const std::string& text) const {
+    const auto start = Clock::now();
     // Pass URI as name (display label) and stripped filesystem path as path
     // (used by SourceManager::assignText for include resolution relative to
     // the file's directory, not the server CWD).
@@ -30,6 +52,8 @@ std::shared_ptr<DocumentState> Analyzer::make_state(const std::string& uri,
     auto state = std::make_shared<DocumentState>(uri, text, nullptr);
     state->source_manager = std::move(sm);
     state->tree = std::move(tree);
+    if (state->tree)
+        state->index = SyntaxIndex::build(*state->tree, state->text);
     // Format diagnostics immediately while the SyntaxTree arena is alive.
     // Do NOT copy slang::Diagnostic objects — their ConstantValue args can
     // contain internal pointers that are not safely copyable.
@@ -64,6 +88,7 @@ std::shared_ptr<DocumentState> Analyzer::make_state(const std::string& uri,
             state->parse_diagnostics.push_back(std::move(info));
         }
     }
+    log_perf("make_state " + uri, start);
     return state;
 }
 
@@ -199,30 +224,42 @@ static std::optional<IndexedFile> build_index_for_file(const std::filesystem::pa
 
 static std::optional<Location>
 find_module_definition(const SyntaxIndex& index, const std::string& uri, const std::string& name) {
-    for (const auto& module : index.modules) {
-        if (module.name == name) {
-            const int line = to_lsp_line(module.line);
-            return Location{uri, line, module.col, line, module.col + (int)module.name.size()};
-        }
-    }
-    return std::nullopt;
+    auto it = index.module_by_name.find(name);
+    if (it == index.module_by_name.end() || it->second >= index.modules.size())
+        return std::nullopt;
+
+    const auto& module = index.modules[it->second];
+    const int line = to_lsp_line(module.line);
+    return Location{uri, line, module.col, line, module.col + (int)module.name.size()};
+}
+
+static const ModuleEntry* find_module_entry(const SyntaxIndex& index, const std::string& name) {
+    auto it = index.module_by_name.find(name);
+    if (it == index.module_by_name.end() || it->second >= index.modules.size())
+        return nullptr;
+    return &index.modules[it->second];
+}
+
+static const PortEntry* find_port_entry(const ModuleEntry& module, const std::string& name) {
+    auto it = module.port_by_name.find(name);
+    if (it == module.port_by_name.end() || it->second >= module.ports.size())
+        return nullptr;
+    return &module.ports[it->second];
 }
 
 static std::optional<Location> find_port_definition(const SyntaxIndex& index,
                                                     const std::string& uri,
                                                     const std::string& module_name,
                                                     const std::string& port_name) {
-    for (const auto& module : index.modules) {
-        if (module.name != module_name)
-            continue;
-        for (const auto& port : module.ports) {
-            if (port.name == port_name) {
-                const int line = to_lsp_line(port.line);
-                return Location{uri, line, port.col, line, port.col + (int)port.name.size()};
-            }
-        }
-    }
-    return std::nullopt;
+    const auto* module = find_module_entry(index, module_name);
+    if (!module)
+        return std::nullopt;
+    const auto* port = find_port_entry(*module, port_name);
+    if (!port)
+        return std::nullopt;
+
+    const int line = to_lsp_line(port->line);
+    return Location{uri, line, port->col, line, port->col + (int)port->name.size()};
 }
 
 static Location location_from_token(const slang::SourceManager& sm, const std::string& uri,
@@ -926,7 +963,7 @@ std::optional<SymbolInfo> Analyzer::symbol_at(const std::string& uri, int line, 
     if (ident.empty())
         return std::nullopt;
 
-    auto idx = SyntaxIndex::build(*state->tree, state->text);
+    const auto& idx = state->index;
     auto target = definition_target_at(*state->tree, line, col);
     auto extra_files = extra_file_snapshots();
 
@@ -1044,11 +1081,15 @@ std::optional<IdentifierAtPosition> Analyzer::identifier_at(const std::string& u
 }
 
 std::optional<Location> Analyzer::definition_of(const std::string& uri, int line, int col) const {
+    const auto start = Clock::now();
     auto state = get_state(uri);
     if (!state || !state->tree)
         return std::nullopt;
 
-    return definition_of_state(*state, uri, line, col, extra_file_snapshots());
+    auto result = definition_of_state(*state, uri, line, col, extra_file_snapshots());
+    log_perf("definition_of " + uri + ":" + std::to_string(line) + ":" + std::to_string(col),
+             start);
+    return result;
 }
 
 std::optional<Location>
@@ -1058,7 +1099,7 @@ Analyzer::definition_of_state(const DocumentState& state, const std::string& uri
         return std::nullopt;
 
     auto target = definition_target_at(*state.tree, line, col);
-    auto idx = SyntaxIndex::build(*state.tree, state.text);
+    const auto& idx = state.index;
 
     if (target.kind == DefinitionTargetKind::None || target.name.empty()) {
         auto ident = extract_ident_span(state.text, line, col);
@@ -1301,6 +1342,7 @@ void Analyzer::set_extra_files(const std::vector<std::string>& paths) {
 }
 
 std::vector<ExtraFileInfo> Analyzer::extra_file_snapshots() const {
+    const auto start = Clock::now();
     std::lock_guard<std::mutex> lock(map_mutex_);
     refresh_extra_cache_locked();
 
@@ -1316,13 +1358,18 @@ std::vector<ExtraFileInfo> Analyzer::extra_file_snapshots() const {
             .index = entry.index,
         });
     }
+    log_perf("extra_file_snapshots files=" + std::to_string(result.size()), start);
     return result;
 }
 
 void Analyzer::merge_extra_file_modules(SyntaxIndex& index) const {
-    for (const auto& extra : extra_file_snapshots())
+    for (const auto& extra : extra_file_snapshots()) {
+        const size_t base = index.modules.size();
         index.modules.insert(index.modules.end(), extra.index.modules.begin(),
                              extra.index.modules.end());
+        for (size_t i = base; i < index.modules.size(); ++i)
+            index.module_by_name.try_emplace(index.modules[i].name, i);
+    }
 }
 
 void Analyzer::refresh_if_stale(const std::string& /*uri*/) const {
@@ -1331,6 +1378,7 @@ void Analyzer::refresh_if_stale(const std::string& /*uri*/) const {
 }
 
 void Analyzer::refresh_extra_cache_locked() const {
+    const auto start = Clock::now();
     std::vector<ExtraFileCacheEntry> refreshed;
     refreshed.reserve(extra_files_.size());
 
@@ -1364,9 +1412,10 @@ void Analyzer::refresh_extra_cache_locked() const {
             .uri = uri,
             .mtime = mtime,
             .state = state,
-            .index = SyntaxIndex::build(*state->tree, state->text),
+            .index = state->index,
         });
     }
 
     extra_cache_ = std::move(refreshed);
+    log_perf("refresh_extra_cache files=" + std::to_string(extra_cache_.size()), start);
 }

@@ -538,8 +538,7 @@ void LazyVerilogServer::register_handlers() {
             }
             // Module and signal names from SyntaxIndex
             if (state && state->tree) {
-                auto idx = SyntaxIndex::build(*state->tree, state->text);
-                for (const auto& m : idx.modules) {
+                for (const auto& m : state->index.modules) {
                     lsCompletionItem item;
                     item.label = m.name;
                     item.kind = optional<lsCompletionItemKind>(lsCompletionItemKind::Module);
@@ -750,7 +749,7 @@ void LazyVerilogServer::register_handlers() {
                 std::string uri = get_string(0);
                 auto state = analyzer_.get_state(uri);
                 if (state && state->tree) {
-                    auto idx = SyntaxIndex::build(*state->tree, state->text);
+                    auto idx = state->index;
                     analyzer_.merge_extra_file_modules(idx);
                     if (cmd == "lazyverilogpy.autowirepreview") {
                         auto preview = autowire_preview(*state, idx, config_.autowire);

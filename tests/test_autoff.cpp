@@ -26,7 +26,7 @@ TEST_CASE("autowire uses cached extra-file modules", "[autowire]") {
     auto state = analyzer.get_state(uri);
     REQUIRE(state);
     REQUIRE(state->tree);
-    auto index = SyntaxIndex::build(*state->tree, state->text);
+    auto index = state->index;
     analyzer.merge_extra_file_modules(index);
 
     auto updated = autowire_apply(*state, index, AutowireOptions{});

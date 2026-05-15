@@ -1,9 +1,9 @@
 #include "autoinst.hpp"
+#include <algorithm>
 #include <slang/syntax/AllSyntax.h>
 #include <slang/syntax/SyntaxTree.h>
 #include <slang/syntax/SyntaxVisitor.h>
 #include <slang/text/SourceManager.h>
-#include <algorithm>
 
 using namespace slang;
 using namespace slang::syntax;
@@ -75,9 +75,8 @@ static std::string simple_identifier_from_expr(const PropertyExprSyntax* expr) {
 
 // ── Main implementation ───────────────────────────────────────────────────────
 
-std::optional<AutoinstResult> autoinst_impl(
-    const DocumentState& state, int line, int /*col*/, const SyntaxIndex& syntax_index)
-{
+std::optional<AutoinstResult> autoinst_impl(const DocumentState& state, int line, int /*col*/,
+                                            const SyntaxIndex& syntax_index) {
     if (!state.tree)
         return std::nullopt;
 
@@ -90,10 +89,9 @@ std::optional<AutoinstResult> autoinst_impl(
         return std::nullopt;
 
     // Sort descending by first_line
-    std::sort(candidates.begin(), candidates.end(),
-              [](const InstCandidate& a, const InstCandidate& b) {
-                  return a.first_line > b.first_line;
-              });
+    std::sort(
+        candidates.begin(), candidates.end(),
+        [](const InstCandidate& a, const InstCandidate& b) { return a.first_line > b.first_line; });
 
     auto lines = split_lines(state.text);
 
@@ -121,12 +119,10 @@ std::optional<AutoinstResult> autoinst_impl(
 
         // Look up ports from SyntaxIndex
         const ModuleEntry* mod_entry = nullptr;
-        for (const auto& m : syntax_index.modules) {
-            if (m.name == module_type) {
-                mod_entry = &m;
-                break;
-            }
-        }
+        auto module_it = syntax_index.module_by_name.find(module_type);
+        if (module_it != syntax_index.module_by_name.end() &&
+            module_it->second < syntax_index.modules.size())
+            mod_entry = &syntax_index.modules[module_it->second];
         if (!mod_entry)
             return std::nullopt; // module not found
 
@@ -162,9 +158,8 @@ std::optional<AutoinstResult> autoinst_impl(
 
 // ── Parse existing port connections ──────────────────────────────────────────
 
-std::map<std::string, std::string> autoinst_parse_connections(
-    const std::string& source, int line_start, int line_end)
-{
+std::map<std::string, std::string> autoinst_parse_connections(const std::string& source,
+                                                              int line_start, int line_end) {
     (void)source;
     (void)line_start;
     (void)line_end;
@@ -173,9 +168,8 @@ std::map<std::string, std::string> autoinst_parse_connections(
 
 // ── Format autoinst ───────────────────────────────────────────────────────────
 
-std::string format_autoinst(
-    const AutoinstResult& result, const std::string& source, const AutoinstOptions& options)
-{
+std::string format_autoinst(const AutoinstResult& result, const std::string& source,
+                            const AutoinstOptions& options) {
     (void)options;
     auto lines = split_lines(source);
 

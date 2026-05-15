@@ -1,8 +1,8 @@
-#include <catch2/catch_test_macros.hpp>
-#include "syntax_index.hpp"
 #include "analyzer.hpp"
-#include <slang/syntax/SyntaxTree.h>
+#include "syntax_index.hpp"
 #include <algorithm>
+#include <catch2/catch_test_macros.hpp>
+#include <slang/syntax/SyntaxTree.h>
 
 static const std::string kMemory = R"(
 module memory #(parameter WIDTH=8, DEPTH=256) (
@@ -35,32 +35,36 @@ TEST_CASE("syntax_index: finds memory module and its ports", "[index]") {
     auto idx = SyntaxIndex::build(*tree, kMemory);
 
     auto it = std::find_if(idx.modules.begin(), idx.modules.end(),
-        [](const ModuleEntry& m){ return m.name == "memory"; });
+                           [](const ModuleEntry& m) { return m.name == "memory"; });
     REQUIRE(it != idx.modules.end());
+    REQUIRE(idx.module_by_name.contains("memory"));
+    CHECK(idx.modules[idx.module_by_name.at("memory")].name == "memory");
     CHECK(it->line > 0);
     CHECK(it->ports.size() >= 5);
 
     auto port_it = std::find_if(it->ports.begin(), it->ports.end(),
-        [](const PortEntry& p){ return p.name == "clk"; });
+                                [](const PortEntry& p) { return p.name == "clk"; });
     REQUIRE(port_it != it->ports.end());
+    REQUIRE(it->port_by_name.contains("clk"));
+    CHECK(it->ports[it->port_by_name.at("clk")].name == "clk");
     CHECK(port_it->direction == "input");
 }
 
 TEST_CASE("syntax_index: finds top module", "[index]") {
     auto tree = slang::syntax::SyntaxTree::fromText(kMemory);
-    auto idx  = SyntaxIndex::build(*tree, kMemory);
+    auto idx = SyntaxIndex::build(*tree, kMemory);
 
     auto it = std::find_if(idx.modules.begin(), idx.modules.end(),
-        [](const ModuleEntry& m){ return m.name == "top"; });
+                           [](const ModuleEntry& m) { return m.name == "top"; });
     REQUIRE(it != idx.modules.end());
 }
 
 TEST_CASE("syntax_index: finds memory instantiation in top", "[index]") {
     auto tree = slang::syntax::SyntaxTree::fromText(kMemory);
-    auto idx  = SyntaxIndex::build(*tree, kMemory);
+    auto idx = SyntaxIndex::build(*tree, kMemory);
 
     auto it = std::find_if(idx.instances.begin(), idx.instances.end(),
-        [](const InstanceEntry& e){ return e.module_name == "memory"; });
+                           [](const InstanceEntry& e) { return e.module_name == "memory"; });
     REQUIRE(it != idx.instances.end());
     CHECK(it->instance_name == "u_mem");
 }

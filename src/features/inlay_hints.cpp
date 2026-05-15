@@ -44,7 +44,7 @@ static ModuleMap build_module_map(const Analyzer& analyzer) {
     analyzer.for_each_state(
         [&](const std::string&, const std::shared_ptr<const DocumentState>& state) {
             if (state && state->tree)
-                overlay_modules(modules, SyntaxIndex::build(*state->tree, state->text));
+                overlay_modules(modules, state->index);
         });
 
     return modules;
@@ -72,7 +72,7 @@ std::vector<lsInlayHint> provide_inlay_hints(const Analyzer& analyzer, const std
         return {};
 
     const auto lines = split_lines(state->text);
-    const auto current_index = SyntaxIndex::build(*state->tree, state->text);
+    const auto& current_index = state->index;
     const auto modules = build_module_map(analyzer);
     std::vector<lsInlayHint> hints;
 

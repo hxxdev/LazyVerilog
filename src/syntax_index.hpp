@@ -2,6 +2,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace slang::syntax {
@@ -21,6 +22,7 @@ struct ModuleEntry {
     int line{0}; // 1-based, 0 if unknown
     int col{0};  // 0-based
     std::vector<PortEntry> ports;
+    std::unordered_map<std::string, size_t> port_by_name;
 };
 
 struct NamedPortConn {
@@ -43,6 +45,7 @@ struct InstanceEntry {
 struct SyntaxIndex {
     std::vector<ModuleEntry> modules;
     std::vector<InstanceEntry> instances;
+    std::unordered_map<std::string, size_t> module_by_name;
 
     /// Build index from a parsed SyntaxTree.
     /// @param source  the source text that produced @p tree (used for line-number lookup).
