@@ -260,7 +260,7 @@ TEST_CASE("extra file cache refreshes by mtime and drops removed files", "[defin
         out << "module child(input logic clk, output logic ack);\nendmodule\n";
     }
     std::filesystem::last_write_time(extra_path, original_mtime);
-    analyzer.refresh_if_stale("");
+    analyzer.set_extra_files({extra_path.string()});
     auto unchanged = analyzer.definition_of(top_uri, 2, 31);
     REQUIRE(unchanged.has_value());
 
@@ -269,10 +269,10 @@ TEST_CASE("extra file cache refreshes by mtime and drops removed files", "[defin
         out << "module child(input logic clk, output logic ack);\nendmodule\n";
     }
     std::filesystem::last_write_time(extra_path, original_mtime + std::chrono::seconds(2));
-    analyzer.refresh_if_stale("");
+    analyzer.set_extra_files({extra_path.string()});
     CHECK_FALSE(analyzer.definition_of(top_uri, 2, 31).has_value());
 
     std::filesystem::remove(extra_path);
-    analyzer.refresh_if_stale("");
+    analyzer.set_extra_files({extra_path.string()});
     CHECK(analyzer.extra_file_snapshots().empty());
 }

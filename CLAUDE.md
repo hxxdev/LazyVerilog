@@ -46,8 +46,7 @@ cat /tmp/lsp-cpp.log.stderr  # server stderr / crash output
 
 ### Analyzer internals (ported from Python)
 
-- `set_extra_files(paths)` re-parses all open docs immediately.
-- `refresh_if_stale(uri)` checks mtime of extra files; called at start of `autoinst`/`autoarg`.
+- `set_extra_files(paths)` parses all extra files immediately; resets the filelist mtime cache.
 - `autoinst`: uses only `body.portList`; empty `()` header → no ports returned.
 - `autoarg`: text-based; scans for `module`/`endmodule`, extracts ports, returns `(...)` header range.
 - `_find_instance_at_line(state, line)` finds Instance by line number (handles non-ANSI Verilog).

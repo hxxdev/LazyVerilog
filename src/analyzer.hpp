@@ -99,9 +99,6 @@ class Analyzer {
     /// Append cached extra-file modules to an existing SyntaxIndex.
     void merge_extra_file_modules(SyntaxIndex& index) const;
 
-    /// Check mtime of extra files and re-parse if stale.
-    void refresh_if_stale(const std::string& uri) const;
-
   private:
     std::shared_ptr<DocumentState> make_state(const std::string& uri,
                                               const std::string& text) const;

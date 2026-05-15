@@ -1417,15 +1417,6 @@ void Analyzer::merge_extra_file_modules(SyntaxIndex& index) const {
     }
 }
 
-void Analyzer::refresh_if_stale(const std::string& /*uri*/) const {
-    std::lock_guard<std::mutex> lock(map_mutex_);
-    refresh_extra_cache_locked();
-    // Update filelist mtime cache so the next extra_file_snapshots() call
-    // doesn't redundantly re-refresh after this forced check.
-    if (!filelist_path_.empty())
-        filelist_mtime_ = file_mtime(std::filesystem::path(filelist_path_));
-}
-
 void Analyzer::refresh_extra_cache_locked() const {
     const auto start = Clock::now();
     std::vector<ExtraFileCacheEntry> refreshed;
