@@ -107,6 +107,16 @@ void Analyzer::change(const std::string& uri, const std::string& text) {
 void Analyzer::close(const std::string& uri) {
     std::lock_guard<std::mutex> lock(map_mutex_);
     docs_.erase(uri);
+    // If the closed file is also in extra_cache_, invalidate its mtime so
+    // refresh_extra_cache_locked() re-parses it from disk on the next access.
+    // Without this, extra_cache_ holds the pre-open snapshot — missing any
+    // edits the user made while the file was open.
+    for (auto& entry : extra_cache_) {
+        if (entry.uri == uri) {
+            entry.mtime = std::nullopt;
+            break;
+        }
+    }
 }
 
 std::vector<std::string> Analyzer::extra_files() const {
@@ -1086,7 +1096,13 @@ std::optional<Location> Analyzer::definition_of(const std::string& uri, int line
     if (!state || !state->tree)
         return std::nullopt;
 
-    auto result = definition_of_state(*state, uri, line, col, extra_file_snapshots());
+    auto extra = extra_file_snapshots();
+    // Remove the current document from extra to avoid searching it twice
+    // (definition_of_state already searches it as the primary doc).
+    extra.erase(std::remove_if(extra.begin(), extra.end(),
+                               [&uri](const ExtraFileInfo& e) { return e.uri == uri; }),
+                extra.end());
+    auto result = definition_of_state(*state, uri, line, col, extra);
     log_perf("definition_of " + uri + ":" + std::to_string(line) + ":" + std::to_string(col),
              start);
     return result;
@@ -1332,25 +1348,54 @@ std::vector<std::pair<int, int>> Analyzer::find_occurrences(const std::string& u
     return result;
 }
 
-void Analyzer::set_extra_files(const std::vector<std::string>& paths) {
+void Analyzer::set_extra_files(const std::vector<std::string>& paths,
+                               const std::string& filelist_path) {
     std::lock_guard<std::mutex> lock(map_mutex_);
+    filelist_path_ = filelist_path;
     extra_files_.clear();
     extra_files_.reserve(paths.size());
     for (const auto& path : paths)
         extra_files_.push_back(normalize_path(path).string());
     refresh_extra_cache_locked();
+    // Cache current filelist mtime so the next extra_file_snapshots() call
+    // skips the refresh (nothing changed since this forced full parse).
+    if (!filelist_path_.empty())
+        filelist_mtime_ = file_mtime(std::filesystem::path(filelist_path_));
 }
 
 std::vector<ExtraFileInfo> Analyzer::extra_file_snapshots() const {
     const auto start = Clock::now();
     std::lock_guard<std::mutex> lock(map_mutex_);
-    refresh_extra_cache_locked();
+    // Verible-style: stat() only the .f filelist file (1 syscall per request)
+    // instead of every individual extra file (N syscalls). Refresh the cache
+    // only when the filelist itself changes. On NFS/HPC this keeps per-request
+    // overhead at O(1) instead of O(N * stat_latency).
+    if (!filelist_path_.empty()) {
+        const auto current_mtime = file_mtime(std::filesystem::path(filelist_path_));
+        if (current_mtime != filelist_mtime_) {
+            refresh_extra_cache_locked();
+            filelist_mtime_ = current_mtime;
+        }
+    }
 
     std::vector<ExtraFileInfo> result;
     result.reserve(extra_cache_.size());
     for (const auto& entry : extra_cache_) {
-        if (!entry.state || docs_.contains(entry.uri))
+        if (!entry.state)
             continue;
+        // If the file is currently open in the editor, use its live docs_ state
+        // so callers see the latest edits rather than the stale disk parse.
+        // (Previously this skipped open files entirely, making split-open buffers
+        // invisible to cross-file lookups like go-to-def, hover, references.)
+        if (const auto it = docs_.find(entry.uri); it != docs_.end()) {
+            result.push_back(ExtraFileInfo{
+                .path = entry.path,
+                .uri = entry.uri,
+                .state = it->second,
+                .index = it->second->index,
+            });
+            continue;
+        }
         result.push_back(ExtraFileInfo{
             .path = entry.path,
             .uri = entry.uri,
@@ -1375,6 +1420,10 @@ void Analyzer::merge_extra_file_modules(SyntaxIndex& index) const {
 void Analyzer::refresh_if_stale(const std::string& /*uri*/) const {
     std::lock_guard<std::mutex> lock(map_mutex_);
     refresh_extra_cache_locked();
+    // Update filelist mtime cache so the next extra_file_snapshots() call
+    // doesn't redundantly re-refresh after this forced check.
+    if (!filelist_path_.empty())
+        filelist_mtime_ = file_mtime(std::filesystem::path(filelist_path_));
 }
 
 void Analyzer::refresh_extra_cache_locked() const {

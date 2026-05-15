@@ -107,16 +107,22 @@ static std::string trim_copy(std::string_view text) {
     return std::string(text.substr(first, last - first + 1));
 }
 
+static std::string resolve_vcode_path(const std::filesystem::path& root, const Config& config) {
+    if (config.design.vcode.empty())
+        return {};
+    auto filelist = std::filesystem::path(config.design.vcode);
+    if (filelist.is_relative())
+        filelist = root / filelist;
+    return std::filesystem::absolute(filelist).lexically_normal().string();
+}
+
 static std::vector<std::string> load_vcode_files(const std::filesystem::path& root,
                                                  const Config& config) {
     std::vector<std::string> paths;
     if (config.design.vcode.empty())
         return paths;
 
-    auto filelist = std::filesystem::path(config.design.vcode);
-    if (filelist.is_relative())
-        filelist = root / filelist;
-    filelist = std::filesystem::absolute(filelist).lexically_normal();
+    auto filelist = std::filesystem::path(resolve_vcode_path(root, config));
 
     std::ifstream input(filelist);
     if (!input)
@@ -165,7 +171,7 @@ struct LazyVerilogServer::Impl {
 LazyVerilogServer::LazyVerilogServer() : impl_(std::make_unique<Impl>()) {
     root_ = std::filesystem::current_path();
     config_ = load_config(root_);
-    analyzer_.set_extra_files(load_vcode_files(root_, config_));
+    analyzer_.set_extra_files(load_vcode_files(root_, config_), resolve_vcode_path(root_, config_));
     register_handlers();
     impl_->remote_endpoint.startProcessingMessages(impl_->input, impl_->output);
 }
@@ -243,14 +249,14 @@ void LazyVerilogServer::register_handlers() {
                 if (std::filesystem::exists(p)) {
                     root_ = p;
                     config_ = load_config(root_);
-                    analyzer_.set_extra_files(load_vcode_files(root_, config_));
+                    analyzer_.set_extra_files(load_vcode_files(root_, config_), resolve_vcode_path(root_, config_));
                 }
             } else if (req.params.rootPath && !req.params.rootPath->empty()) {
                 std::filesystem::path p(*req.params.rootPath);
                 if (std::filesystem::exists(p)) {
                     root_ = p;
                     config_ = load_config(root_);
-                    analyzer_.set_extra_files(load_vcode_files(root_, config_));
+                    analyzer_.set_extra_files(load_vcode_files(root_, config_), resolve_vcode_path(root_, config_));
                 }
             }
 
@@ -315,7 +321,7 @@ void LazyVerilogServer::register_handlers() {
         try {
             // Re-read config from disk on every configuration change
             config_ = load_config(root_);
-            analyzer_.set_extra_files(load_vcode_files(root_, config_));
+            analyzer_.set_extra_files(load_vcode_files(root_, config_), resolve_vcode_path(root_, config_));
             (void)note; // settings in note.params.settings parsed lazily
         } catch (const std::exception& e) {
             std::cerr << "[lazyverilog] didChangeConfiguration error: " << e.what() << "\n";
@@ -372,7 +378,7 @@ void LazyVerilogServer::register_handlers() {
                 if (!found.empty()) {
                     root_ = found;
                     config_ = load_config(root_);
-                    analyzer_.set_extra_files(load_vcode_files(root_, config_));
+                    analyzer_.set_extra_files(load_vcode_files(root_, config_), resolve_vcode_path(root_, config_));
                 }
             }
             analyzer_.open(td.uri.raw_uri_, td.text);

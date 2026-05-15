@@ -84,7 +84,11 @@ class Analyzer {
     }
 
     /// Set extra files from .f filelist.
-    void set_extra_files(const std::vector<std::string>& paths);
+    /// @param filelist_path  Resolved absolute path to the .f file itself (may be empty).
+    ///                       Used to detect filelist changes with a single stat() per request
+    ///                       instead of stat()-ing every individual extra file.
+    void set_extra_files(const std::vector<std::string>& paths,
+                         const std::string& filelist_path = {});
 
     /// Return extra files from .f filelist.
     std::vector<std::string> extra_files() const;
@@ -114,6 +118,14 @@ class Analyzer {
     };
 
     void refresh_extra_cache_locked() const;
+
+    // Verible-style filelist mtime tracking: on every extra_file_snapshots()
+    // call, stat() only the .f filelist file (1 syscall) instead of every
+    // individual extra file (N syscalls). Refresh the cache only when the
+    // filelist itself changes. On NFS/HPC this reduces per-request overhead
+    // from O(N * stat_latency) to O(1).
+    mutable std::string filelist_path_;
+    mutable std::optional<std::filesystem::file_time_type> filelist_mtime_;
 
     mutable std::mutex map_mutex_;
     std::unordered_map<std::string, std::shared_ptr<const DocumentState>> docs_;
