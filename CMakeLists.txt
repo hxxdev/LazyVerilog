@@ -78,6 +78,17 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(LspCpp)
 
+# Patch: LspCpp's lsServerCapabilities MAKE_REFLECT_STRUCT omits inlayHintProvider,
+# so the field is never serialized in the initialize response and clients never see
+# the capability. Apply an idempotent string replacement after every cmake run.
+set(_caps_h "${lspcpp_SOURCE_DIR}/include/LibLsp/lsp/general/lsServerCapabilities.h")
+file(READ "${_caps_h}" _caps_content)
+string(REPLACE
+    "monikerProvider, semanticTokensProvider\n)"
+    "monikerProvider, semanticTokensProvider, inlayHintProvider\n)"
+    _caps_content "${_caps_content}")
+file(WRITE "${_caps_h}" "${_caps_content}")
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Main LSP server binary
 # ──────────────────────────────────────────────────────────────────────────────
