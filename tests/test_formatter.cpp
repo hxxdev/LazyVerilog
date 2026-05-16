@@ -9,10 +9,10 @@ TEST_CASE("formatter: function calls support block layout", "[formatter]") {
 
     CHECK(format_source("result = my_func(arg1, arg2, arg3);\n", opts) ==
           "result = my_func(\n"
-          "    arg1,\n"
-          "    arg2,\n"
-          "    arg3\n"
-          ");\n");
+          "             arg1,\n"
+          "             arg2,\n"
+          "             arg3\n"
+          "         );\n");
 }
 
 TEST_CASE("formatter: function calls support hanging layout", "[formatter]") {
@@ -61,6 +61,66 @@ TEST_CASE("formatter: define macro body not reformatted", "[formatter]") {
         "        $display(\"0x%x \", ARR[ii]); \\\n"
         "    end\n";
     CHECK(format_source(src, opts) == src);
+}
+
+TEST_CASE("formatter: inline line comments stay on their original line", "[formatter]") {
+    FormatOptions opts;
+    opts.default_indent_level_inside_module_block = 0;
+
+    CHECK(format_source("module top;\n"
+                        "assign a = b; // keep this inline\n"
+                        "endmodule\n", opts) ==
+          "module top;\n"
+          "assign a = b; // keep this inline\n"
+          "endmodule\n");
+}
+
+TEST_CASE("formatter: inline block comments stay on their original line", "[formatter]") {
+    FormatOptions opts;
+    opts.default_indent_level_inside_module_block = 0;
+
+    CHECK(format_source("module top;\n"
+                        "assign a = b; /* keep this inline */\n"
+                        "endmodule\n", opts) ==
+          "module top;\n"
+          "assign a = b; /* keep this inline */\n"
+          "endmodule\n");
+}
+
+TEST_CASE("formatter: block function call after inline block comment indents from call", "[formatter]") {
+    FormatOptions opts;
+    opts.indent_size = 4;
+    opts.default_indent_level_inside_module_block = 0;
+    opts.function.break_policy = "always";
+    opts.function.layout = "block";
+
+    CHECK(format_source("module top;\n"
+                        "always_comb begin\n"
+                        "/**/ add_number(.a(a3), .b(b), .result(result));\n"
+                        "end\n"
+                        "endmodule\n", opts) ==
+          "module top;\n"
+          "always_comb begin\n"
+          "    /**/ add_number(\n"
+          "             .a(a3),\n"
+          "             .b(b),\n"
+          "             .result(result)\n"
+          "         );\n"
+          "end\n"
+          "endmodule\n");
+}
+
+TEST_CASE("formatter: declaration comment separator is one space", "[formatter]") {
+    FormatOptions opts;
+    opts.var_declaration.align = true;
+    opts.default_indent_level_inside_module_block = 0;
+
+    CHECK(format_source("module top;\n"
+                        "logic a; // one space before comment\n"
+                        "endmodule\n", opts) ==
+          "module top;\n"
+          "logic a                             ; // one space before comment\n"
+          "endmodule\n");
 }
 
 TEST_CASE("formatter: adaptive var declaration section4 does not use block max", "[formatter]") {

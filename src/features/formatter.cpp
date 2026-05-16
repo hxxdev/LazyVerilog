@@ -410,7 +410,7 @@ static int spaces_req(const Tok& L, const Tok& R,
     auto rf=R.ftt; const auto& rx=R.text;
 
     if (lf==FTT::IncludeDirective||rf==FTT::IncludeDirective) return 0;
-    if (rf==FTT::EolComment||rf==FTT::CommentBlock) return 2;
+    if (rf==FTT::EolComment||rf==FTT::CommentBlock) return 1;
     if (lf==FTT::OpenGroup||rf==FTT::CloseGroup) return 0;
     if (lf==FTT::UnaryOperator) return 0;
     if (lf==FTT::Hierarchy&&lx=="::") return 0;
@@ -544,7 +544,7 @@ static PortParsed parse_port(const std::string& raw) {
 
     auto cp=code.find("//");
     if (cp!=std::string::npos) {
-        r.comment = "  "+code.substr(cp); code=code.substr(0,cp);
+        r.comment = " "+code.substr(cp); code=code.substr(0,cp);
         while(!code.empty()&&(code.back()==' '||code.back()=='\t')) code.pop_back();
     }
     if (!code.empty()&&(code.back()==','||code.back()==';')) {
@@ -924,7 +924,7 @@ static VarParsed* parse_var_line(const std::string& line) {
     auto cm = code.rfind("//");
     if(cm!=std::string::npos) {
         // Make sure // is not inside a string
-        comment = "  " + code.substr(cm);
+        comment = " " + code.substr(cm);
         code = code.substr(0,cm);
         while(!code.empty()&&(code.back()==' '||code.back()=='\t')) code.pop_back();
     }
@@ -1535,9 +1535,7 @@ static std::string format_function_calls_pass(const std::string& text, const For
             r += ")" + suffix;
             out.push_back(r);
         } else {
-            size_t base_len=0;
-            while(base_len<prefix.size()&&(prefix[base_len]==' '||prefix[base_len]=='\t')) ++base_len;
-            std::string base_indent = prefix.substr(0, base_len);
+            std::string base_indent(prefix.size(), ' ');
             std::string arg_indent = base_indent + std::string(std::max(0, opts.indent_size), ' ');
             std::string r = open_text + "\n";
             for(size_t i=0;i<args.size();++i) {
@@ -1846,11 +1844,26 @@ std::string format_source(const std::string& source, const FormatOptions& opts) 
             dec=break_dec(*prev,tok,opts,in_dim);
         }
 
+        // A semicolon schedules a newline, but an inline comment belongs to
+        // the same original line.  Do not let that pending newline split the
+        // comment onto its own line.
+        bool inline_comment = false;
+        if ((tok.ftt == FTT::EolComment || tok.ftt == FTT::CommentBlock) && prev) {
+            int prev_ln =
+                (prev->pos < (int)pos_to_orig_line.size()) ? pos_to_orig_line[prev->pos] : 0;
+            int tok_ln =
+                (tok.pos < (int)pos_to_orig_line.size()) ? pos_to_orig_line[tok.pos] : 0;
+            inline_comment = prev_ln == tok_ln;
+        }
+
         // Special: "end while" — kMustAppend only inside do...while
         if (prev&&prev->lo=="end"&&tok.ftt==FTT::Keyword&&tok.lo=="while") {
             if (do_depth>0) { dec=SD::MustAppend; --do_depth; }
             else            { dec=SD::Undecided; }
         }
+
+        if (inline_comment && pending_nl)
+            pending_nl = false;
 
         if (dec==SD::MustWrap) {
             pending_nl=false;
