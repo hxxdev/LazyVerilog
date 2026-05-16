@@ -51,11 +51,6 @@ std::optional<AutoargResult> autoarg_impl(const DocumentState& state, int line, 
     if (!module || !module->header || !module->header->ports)
         return std::nullopt;
 
-    // Match the legacy behavior: autoarg updates only non-ANSI / empty headers; ANSI
-    // headers already carry directions and must not be rewritten to plain names.
-    if (module->header->ports->as_if<AnsiPortListSyntax>())
-        return std::nullopt;
-
     std::vector<std::string> port_names;
     for (const auto* member : module->members) {
         if (!member)
