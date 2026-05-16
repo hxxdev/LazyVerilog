@@ -768,6 +768,7 @@ void LazyVerilogServer::register_handlers() {
                         new_text += "\n";
                     new_text += lines[i];
                 }
+                new_text = format_source(new_text, config_.format);
 
                 // Build workspace edit JSON and set as result
                 lsWorkspaceEdit we;
@@ -859,6 +860,8 @@ void LazyVerilogServer::register_handlers() {
                         rsp.result.SetJsonString(json, lsp::Any::kUnKnown);
                     } else {
                         std::string new_source = autowire_apply(*state, idx, config_.autowire);
+                        if (new_source != state->text)
+                            new_source = format_source(new_source, config_.format);
                         if (new_source != state->text) {
                             lsWorkspaceEdit we;
                             lsTextEdit text_edit;

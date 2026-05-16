@@ -5,6 +5,7 @@
 #include "autofunc.hpp"
 #include "autoinst.hpp"
 #include "autowire.hpp"
+#include "formatter.hpp"
 #include <iostream>
 #include <slang/syntax/AllSyntax.h>
 #include <slang/syntax/SyntaxTree.h>
@@ -26,6 +27,13 @@ static lsWorkspaceEdit make_range_edit(const std::string& uri, int start_line, i
     we.changes = std::map<std::string, std::vector<lsTextEdit>>{};
     (*we.changes)[uri] = {edit};
     return we;
+}
+
+static std::string format_emit_text(const std::string& text, const FormatOptions& options) {
+    std::string formatted = format_source(text, options);
+    while (!formatted.empty() && formatted.back() == '\n')
+        formatted.pop_back();
+    return formatted;
 }
 
 static int token_line(const SourceManager& sm, const slang::parsing::Token& tok) {
@@ -101,7 +109,8 @@ std::vector<CodeAction> provide_code_actions(const Analyzer& analyzer, const Con
         if (state->tree) {
             auto result = autoinst_impl(*state, line, col, idx);
             if (result) {
-                std::string formatted = format_autoinst(*result, state->text, config.autoinst);
+                std::string formatted = format_emit_text(
+                    format_autoinst(*result, state->text, config.autoinst), config.format);
                 // Replace the instantiation range
                 auto we = make_range_edit(uri, result->line_start, 0, result->line_end + 1, 0,
                                           formatted + "\n");
@@ -121,7 +130,8 @@ std::vector<CodeAction> provide_code_actions(const Analyzer& analyzer, const Con
         if (state->tree) {
             auto result = autoarg_impl(*state, line, col);
             if (result) {
-                std::string formatted = format_autoarg(*result, config.autoarg);
+                std::string formatted = format_emit_text(format_autoarg(*result, config.autoarg),
+                                                         config.format);
                 auto we = make_range_edit(uri, result->open_line, result->open_col,
                                           result->end_line, result->end_col, formatted);
                 CodeAction action;
@@ -139,6 +149,12 @@ std::vector<CodeAction> provide_code_actions(const Analyzer& analyzer, const Con
     try {
         auto we = autofunc(analyzer, uri, line, col, config.autofunc);
         if (we) {
+            if (we->changes) {
+                for (auto& [_, edits] : *we->changes) {
+                    for (auto& edit : edits)
+                        edit.newText = format_emit_text(edit.newText, config.format);
+                }
+            }
             CodeAction action;
             action.title = "AutoFunc: expand function call";
             action.kind = optional<std::string>(std::string("refactor.rewrite"));
