@@ -5,7 +5,7 @@ TEST_CASE("formatter: function calls support block layout", "[formatter]") {
     FormatOptions opts;
     opts.function.break_policy = "always";
     opts.function.layout = "block";
-    opts.function.indent_width = 4;
+    opts.indent_size = 4;
 
     CHECK(format_source("result = my_func(arg1, arg2, arg3);\n", opts) ==
           "result = my_func(\n"

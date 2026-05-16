@@ -1473,7 +1473,7 @@ static std::string format_function_calls_pass(const std::string& text, const For
             size_t base_len=0;
             while(base_len<prefix.size()&&(prefix[base_len]==' '||prefix[base_len]=='\t')) ++base_len;
             std::string base_indent = prefix.substr(0, base_len);
-            std::string arg_indent = base_indent + std::string(std::max(0, fo.indent_width), ' ');
+            std::string arg_indent = base_indent + std::string(std::max(0, opts.indent_size), ' ');
             std::string r = open_text + "\n";
             for(size_t i=0;i<args.size();++i) {
                 r += arg_indent + args[i];

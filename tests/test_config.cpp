@@ -79,17 +79,29 @@ wrap_end_else_clauses = true
 
 [format.port_declaration]
 align = true
+align_adaptive = true
 section1_min_width = 6
 section2_min_width = 20
 
 [format.var_declaration]
 align = true
+align_adaptive = true
 section1_min_width = 10
 
 [format.instance]
 align = true
 port_indent_level = 2
 instance_port_name_width = 12
+align_adaptive = true
+
+[format.function]
+break_policy = "always"
+line_length = 80
+arg_count = 3
+layout = "hanging"
+trailing_comma = true
+space_before_paren = true
+space_inside_paren = true
 
 [format.port]
 non_ansi_port_per_line_enabled = true
@@ -139,15 +151,26 @@ autoarg_on_save = true
     CHECK(cfg.format.statement.wrap_end_else_clauses == true);
 
     CHECK(cfg.format.port_declaration.align == true);
+    CHECK(cfg.format.port_declaration.align_adaptive == true);
     CHECK(cfg.format.port_declaration.section1_min_width == 6);
     CHECK(cfg.format.port_declaration.section2_min_width == 20);
 
     CHECK(cfg.format.var_declaration.align == true);
+    CHECK(cfg.format.var_declaration.align_adaptive == true);
     CHECK(cfg.format.var_declaration.section1_min_width == 10);
 
     CHECK(cfg.format.instance.align == true);
     CHECK(cfg.format.instance.port_indent_level == 2);
     CHECK(cfg.format.instance.instance_port_name_width == 12);
+    CHECK(cfg.format.instance.align_adaptive == true);
+
+    CHECK(cfg.format.function.break_policy == "always");
+    CHECK(cfg.format.function.line_length == 80);
+    CHECK(cfg.format.function.arg_count == 3);
+    CHECK(cfg.format.function.layout == "hanging");
+    CHECK(cfg.format.function.trailing_comma == true);
+    CHECK(cfg.format.function.space_before_paren == true);
+    CHECK(cfg.format.function.space_inside_paren == true);
 
     CHECK(cfg.format.port.non_ansi_port_per_line_enabled == true);
     CHECK(cfg.format.port.non_ansi_port_per_line == 4);
