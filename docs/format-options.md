@@ -255,10 +255,8 @@ Formats function and task calls.
 [format.function_call]
 break_policy = "auto"      # never | always | auto
 line_length = 100
-arg_count = null
+arg_count = -1
 layout = "block"           # hanging | block
-indent_width = 4
-trailing_comma = false
 space_before_paren = false
 space_inside_paren = false
 ```
@@ -286,12 +284,10 @@ length, it breaks.
 
 | type | default |
 |------|---------|
-| int or `null` | `null` |
+| int | `-1` |
 
-Used only when `break_policy = "auto"`. If not `null`, calls break when the
-argument count is greater than or equal to this value.
-
-In the current loader, `null` means "disabled".
+Used only when `break_policy = "auto"`. If `-1`, arg-count breaking is
+disabled. Otherwise, calls break when the argument count is ≥ this value.
 
 ### `layout`
 
@@ -316,23 +312,6 @@ result = my_func(arg1,
                  arg2,
                  arg3);
 ```
-
-### `indent_width`
-
-| type | default |
-|------|---------|
-| int | `4` |
-
-Used only by `layout = "block"`. Controls indentation for broken argument
-lines.
-
-### `trailing_comma`
-
-| type | default |
-|------|---------|
-| bool | `false` |
-
-Used only by `layout = "block"`. Adds a trailing comma after the last argument.
 
 ### `space_before_paren`
 
