@@ -84,13 +84,25 @@ std::optional<AutoargResult> autoarg_impl(const DocumentState& state, int line, 
     return result;
 }
 
-std::string format_autoarg(const AutoargResult& result, const AutoargOptions& options) {
+std::string format_autoarg(
+    const AutoargResult& result, const AutoargOptions& options, const FormatOptions& format_options)
+{
     std::string indent((size_t)std::max(0, options.indent_size), ' ');
     std::string out = "(\n";
-    for (size_t i = 0; i < result.port_names.size(); ++i) {
+    int ports_per_line = format_options.port.non_ansi_port_per_line_enabled
+                             ? format_options.port.non_ansi_port_per_line
+                             : 1;
+    ports_per_line = std::max(1, ports_per_line);
+
+    for (size_t i = 0; i < result.port_names.size(); i += (size_t)ports_per_line) {
+        size_t end = std::min(i + (size_t)ports_per_line, result.port_names.size());
         out += indent;
-        out += result.port_names[i];
-        if (i + 1 < result.port_names.size())
+        for (size_t j = i; j < end; ++j) {
+            if (j > i)
+                out += ", ";
+            out += result.port_names[j];
+        }
+        if (end < result.port_names.size())
             out += ",";
         out += "\n";
     }

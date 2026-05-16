@@ -98,7 +98,7 @@ section4_min_width = 16
 break_policy = "auto"      # never | always | auto
 line_length = 100
 arg_count = 3 # when auto: break if arg count >= this value; -1 disables arg-count breaking
-layout = "hanging"           # hanging | block
+layout = "block"           # hanging | block
 trailing_comma = true
 space_before_paren = false
 space_inside_paren = false

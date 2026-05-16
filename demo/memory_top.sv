@@ -33,55 +33,64 @@ module memory_top(
     i_data2, i_data3, i_dd,
     i_dd22222, dd22222, i_d33333,
     i_d44333, i_dd44321, i_d44334,
-    VDD, VSS
+    VDD, VSS, test,
+    VSS
 );
-input i_clk;
-input i_rst_n;
-input logic signed [1:0] i_data[7:0];
-input var byte i_data2;
-input i_data3;
-input i_dd;
-input i_dd22222;
-input dd22222;
-input i_d33333;
-input i_d44333, i_dd44321;
-input i_d44334;
-output logic unsigned [0:0] VDD, VSS;
+input                                         i_clk                                   ;
+input                                         i_rst_n                                 ;
+input logic signed        [1:0]               i_data              [7:0]               ;
+input var byte                                i_data2                                 ;
+input                                         i_data3                                 ;
+input                                         i_dd                                    ;
+input                                         i_dd22222                               ;
+input                                         dd22222                                 ;
+input                                         i_d33333                                ;
+input i_d44333                                                                        , i_dd44321                               ;
+input                                         i_d44334                                ;
+output logic unsigned     [0:0]               VDD                                     , VSS                                     ;
+output packet_tttttttttttttt [0:0]            test                                    , VSS                                     ;
 
-logic [7:0] dout                    = 8'hFF;
-logic [8:0] douteeeeeeeeeeeeeeeeeee = 8'hFF;
-logic [`WIDTH-1:0] data;
+logic               [7:0]               dout                           = 8'hFF         ;
+logic               [8:0]               douteeeeeeeeeeeeeeeeeeeeeeeeee = 8'hFF         ;
+packet_t                                test_init                      = 8'hFF         ;
+packet_t                                test_init2                     = 8'hFF         ;
+logic               [`WIDTH-1:0]        data                                           ;
 
-packet_tttttttttttttt[1:0] dp;
-logic [2:0] a, b;
+packet_ttttttttttteeettt [1:0]          dp                                             ;
+logic               [2:0]               a                                              , b                                   ;
 //dd
 /* ehlo */  // a, b, c
 //
 //
 //
 //
-logic [7:0] data_out;
-logic tt;
-reg signed [7:0] kj;
+logic               [7:0]               data_out                                       ;
+logic                                   tt                                             ;
+reg signed          [7:0]               kj                                             ;
 // logic                                               c                           ;
 
 // b
 /* ehlo */  // logic           [2:0]                   d                           ;
 
-automatic int [3:0] b;
+automatic int       [3:0]               b                                              ;
 
-wire [1:0] addr;
-logic address;
-logic test, r_test;
-logic test3, r_test2;
-logic r_test4;
-logic [7:0] ddtt;
-logic [7:0] dd;
-logic [7:0] holyshit;
-logic [7:0] zzzry;
-logic [7:0] testxrp;
-logic [7:0] threeshit;
-logic [7:0] intercontest;
+wire                [1:0]               addr                                           ;
+logic                                   address                                        ;
+logic                                   test                                           , r_test                              ;  // test
+logic                                   test3                                          , r_test2                             ;
+logic                                   r_test4                                        ;
+logic               [7:0]               ddtt                                           ;
+logic               [7:0]               dd                                             ;
+logic               [7:0]               holyshit                                       ;
+logic               [7:0]               zzzry                                          ;
+logic               [7:0]               testxrp                                        ;
+logic               [7:0]               threeshit                                      ;
+logic               [3:0]               www333                                         ;
+logic               [3:0]               zzfuk                                          ;
+logic               [3:0]               o_d                                            ;
+logic                                   d                                              ;
+logic               [7:0]               intercontest                                   ;
+
 assign d = a + 1;
 
 memory #(.MEM_SIZE(3)) u_memory (
@@ -133,18 +142,7 @@ memory u_mem5 (
 );
 
 `ifdef RTL_SIM
-memory u_mem3 (
-    .i_clk      (i_clk     ),
-    .address    (address   ),
-    .data_in    (data_in   ),
-    .data_out   (addr      ),
-    .read_write (read_write),
-    .chip_en    (tt        ),
-    .www333     (www333    ),
-    .www333     (www333    ),
-    .zzfuk      (zzfuk     ),
-    .zzfuk      (zzfuk     )
-);
+memory u_mem3(.i_clk(i_clk), .address(address), .data_in(data_in), .data_out(addr), .read_write(read_write), .chip_en(tt), .www333(www333), .www333(www333), .zzfuk(zzfuk), .zzfuk(zzfuk));
 `else
 memory u_mem4();
 `endif
@@ -181,9 +179,11 @@ always_comb begin
     end while (i < 5);
 
     foreach (arr[i]) begin
-        $display("arr[%0d]  = %0d",
-                 i,
-                 arr[i]);
+        $display(
+            "arr[%0d]  = %0d",
+            i,
+            arr[i]
+        );
     end
 
     repeat (3) begin
@@ -196,10 +196,15 @@ always_comb begin
     end
 
     sum(.i_a(i_a2), .i_b(i_b));
-    sum(1, 2);
-    add_number(.a(a2),
-               .b(b),
-               .result(result));
+    sum(.i_a(1), .i_b(2));
+    sum(.i_a(1), .i_b(i_b));
+    sum(.i_a(1), .i_b(i_b));  // com
+    sum(.i_a(1), .i_b(i_b));
+    /**/ add_number(
+        .a(a3),
+        .b(b),
+        .result(result)
+    );
 end
 
 initial begin
@@ -221,13 +226,17 @@ end
 
 endmodule
 
-module inv(
-    i_a, o_d
-);
+module inv(i_a, o_d);
+
 `include "params.svh"
-input fifo_entry_t[3:0] i_a;
-output fifo_entry_t[3:0] o_d;
+
+logic               i_d                                 ;
+logic               i_e                                 ;
+
+input fifo_entry_t        [3:0]               i_a                                     ;
+output fifo_entry_t       [3:0]               o_d                                     ;
 
 assign i_d = ~i_a;
+assign i_e = i_a;
 
 endmodule

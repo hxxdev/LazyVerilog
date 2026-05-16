@@ -83,6 +83,23 @@ TEST_CASE("formatter: adaptive var declaration section4 does not use block max",
           "endmodule\n");
 }
 
+TEST_CASE("formatter: net declarations are aligned with var declarations", "[formatter]") {
+    FormatOptions opts;
+    opts.var_declaration.align = true;
+    opts.default_indent_level_inside_module_block = 0;
+
+    CHECK(format_source("module top;\n"
+                        "logic [7:0] data;\n"
+                        "wire [1:0] addr;\n"
+                        "logic address;\n"
+                        "endmodule\n", opts) ==
+          "module top;\n"
+          "logic [7:0]                         data                          ;\n"
+          "wire  [1:0]                         addr                          ;\n"
+          "logic                               address                       ;\n"
+          "endmodule\n");
+}
+
 TEST_CASE("formatter: user-defined output port type stays in type section", "[formatter]") {
     FormatOptions opts;
     opts.port_declaration.align = true;

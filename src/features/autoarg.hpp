@@ -18,4 +18,4 @@ std::optional<AutoargResult> autoarg_impl(
     const DocumentState& state, int line, int col);
 
 std::string format_autoarg(
-    const AutoargResult& result, const AutoargOptions& options);
+    const AutoargResult& result, const AutoargOptions& options, const FormatOptions& format_options);

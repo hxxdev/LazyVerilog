@@ -36,6 +36,20 @@ static std::string format_emit_text(const std::string& text, const FormatOptions
     return formatted;
 }
 
+static size_t lsp_offset(const std::string& text, int line, int col) {
+    int cur = 0;
+    size_t pos = 0;
+    while (pos < text.size() && cur < line) {
+        if (text[pos] == '\n')
+            ++cur;
+        ++pos;
+    }
+    size_t line_start = pos;
+    while (pos < text.size() && text[pos] != '\n' && (int)(pos - line_start) < col)
+        ++pos;
+    return pos;
+}
+
 static std::string format_replacement_at_column(
     const std::string& text,
     int column,
@@ -150,9 +164,12 @@ std::vector<CodeAction> provide_code_actions(const Analyzer& analyzer, const Con
         if (state->tree) {
             auto result = autoarg_impl(*state, line, col);
             if (result) {
-                std::string formatted = format_emit_text(format_autoarg(*result, config.autoarg),
-                                                         config.format);
-                auto we = make_range_edit(uri, result->open_line, result->open_col,
+                size_t line_start = lsp_offset(state->text, result->open_line, 0);
+                size_t open = lsp_offset(state->text, result->open_line, result->open_col);
+                std::string line_prefix = state->text.substr(line_start, open - line_start);
+                std::string formatted =
+                    line_prefix + format_autoarg(*result, config.autoarg, config.format);
+                auto we = make_range_edit(uri, result->open_line, 0,
                                           result->end_line, result->end_col, formatted);
                 CodeAction action;
                 action.title = "AutoArg: generate port list for " + result->module_name;

@@ -318,3 +318,43 @@ endmodule
           "                   .b(b),\n"
           "                   .result(result));");
 }
+
+TEST_CASE("autoarg code action formats full module header", "[autoarg]") {
+    Analyzer analyzer;
+    const std::string uri = "file:///tmp/autoarg_code_action_header.sv";
+    analyzer.open(uri, R"(
+module memory_top();
+input i_clk;
+input i_rst_n;
+input i_data;
+input i_data2;
+endmodule
+)");
+
+    Config config;
+    config.format.indent_size = 4;
+    config.format.port.non_ansi_port_per_line_enabled = true;
+    config.format.port.non_ansi_port_per_line = 3;
+    config.autoarg.indent_size = 4;
+
+    lsCodeActionParams params;
+    params.textDocument.uri.raw_uri_ = uri;
+    params.range.start = lsPosition(1, 7);
+
+    auto actions = provide_code_actions(analyzer, config, params);
+    auto it = std::find_if(actions.begin(), actions.end(), [](const CodeAction& action) {
+        return action.title == "AutoArg: generate port list for memory_top";
+    });
+    REQUIRE(it != actions.end());
+    REQUIRE(it->edit.has_value());
+    REQUIRE(it->edit->changes.has_value());
+    auto change = it->edit->changes->find(uri);
+    REQUIRE(change != it->edit->changes->end());
+    REQUIRE(change->second.size() == 1);
+    CHECK(change->second[0].range.start == lsPosition(1, 0));
+    CHECK(change->second[0].newText ==
+          "module memory_top(\n"
+          "    i_clk, i_rst_n, i_data,\n"
+          "    i_data2\n"
+          ");");
+}

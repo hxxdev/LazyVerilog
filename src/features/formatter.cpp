@@ -42,6 +42,7 @@ struct LineClassifier : SyntaxVisitor<LineClassifier> {
     void handle(const ImplicitAnsiPortSyntax& n)       { set(n, LineKind::PortDecl);     visitDefault(n); }
     void handle(const PortDeclarationSyntax& n)        { set(n, LineKind::PortDecl);     visitDefault(n); }
     void handle(const DataDeclarationSyntax& n)        { set(n, LineKind::VarDecl);      visitDefault(n); }
+    void handle(const NetDeclarationSyntax& n)         { set(n, LineKind::VarDecl);      visitDefault(n); }
     void handle(const HierarchyInstantiationSyntax& n) { set(n, LineKind::Instantiation);visitDefault(n); }
     void handle(const ModuleDeclarationSyntax& n)      { set(n, LineKind::ModuleHeader); visitDefault(n); }
 };
