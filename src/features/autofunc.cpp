@@ -32,47 +32,47 @@ static std::vector<std::string> split_lines(const std::string& text) {
 // ── Find extent of call starting from identifier ─────────────────────────────
 
 struct CallExtent {
+    int start_line;
     int start_col;
+    int end_line;
     int end_col;
 };
 
-static CallExtent find_call_extent(const std::string& line, int ident_start, int ident_end) {
-    int start_col = ident_start;
-    int end_col = ident_end;
-
+static CallExtent find_call_extent(const std::vector<std::string>& lines, int line,
+                                   int ident_start, int ident_end) {
+    const std::string& first = lines[line];
     int open_pos = ident_end;
-    while (open_pos < (int)line.size() && (line[open_pos] == ' ' || line[open_pos] == '\t'))
+    while (open_pos < (int)first.size() && (first[open_pos] == ' ' || first[open_pos] == '\t'))
         ++open_pos;
-    if (open_pos >= (int)line.size() || (line[open_pos] != '(' && line[open_pos] != ';'))
-        return {start_col, end_col};
+    if (open_pos >= (int)first.size() || (first[open_pos] != '(' && first[open_pos] != ';'))
+        return {line, ident_start, line, ident_end};
+    if (first[open_pos] == ';')
+        return {line, ident_start, line, ident_end};
 
-    if (line[open_pos] == ';') {
-        // No parens — consume just the name
-        return {start_col, ident_end};
-    }
-
-    // Walk forward for balanced parens
+    // Scan forward across lines until parens balance
     int depth = 0;
-    for (int idx = open_pos; idx < (int)line.size(); ++idx) {
-        if (line[idx] == '(') ++depth;
-        else if (line[idx] == ')') {
-            --depth;
-            if (depth <= 0) {
-                end_col = idx + 1;
-                // Also consume trailing semicolon
-                int pos = end_col;
-                while (pos < (int)line.size() && (line[pos] == ' ' || line[pos] == '\t')) ++pos;
-                if (pos < (int)line.size() && line[pos] == ';')
-                    end_col = pos + 1;
-                return {start_col, end_col};
+    for (int l = line; l < (int)lines.size(); ++l) {
+        const std::string& ln = lines[l];
+        int col_start = (l == line) ? open_pos : 0;
+        for (int c = col_start; c < (int)ln.size(); ++c) {
+            if (ln[c] == '(') ++depth;
+            else if (ln[c] == ')') {
+                --depth;
+                if (depth <= 0) {
+                    int end_col = c + 1;
+                    // Consume trailing semicolon on same line
+                    int pos = end_col;
+                    while (pos < (int)ln.size() && (ln[pos] == ' ' || ln[pos] == '\t')) ++pos;
+                    if (pos < (int)ln.size() && ln[pos] == ';') end_col = pos + 1;
+                    return {line, ident_start, l, end_col};
+                }
             }
         }
     }
-    // Unbalanced — consume to end of line
-    end_col = (int)line.size();
-    while (end_col > 0 && (line[end_col-1] == ' ' || line[end_col-1] == '\t' || line[end_col-1] == '\r'))
-        --end_col;
-    return {start_col, end_col};
+    // Unbalanced — use end of last scanned line
+    int last_line = (int)lines.size() - 1;
+    int end_col = (int)lines[last_line].size();
+    return {line, ident_start, last_line, end_col};
 }
 
 // ── Parse existing .port(wire) connections ────────────────────────────────────
@@ -230,11 +230,17 @@ std::optional<lsWorkspaceEdit> autofunc(
     auto ident = analyzer.identifier_at(uri, line, col);
     if (!ident) return std::nullopt;
 
-    // Find call extent on this line
-    auto extent = find_call_extent(src_line, ident->col, ident->end_col);
+    // Find call extent (may span multiple lines)
+    auto extent = find_call_extent(lines, line, ident->col, ident->end_col);
 
-    // Extract existing call text for connection preservation
-    std::string call_text = src_line.substr(extent.start_col, extent.end_col - extent.start_col);
+    // Extract existing call text (possibly multi-line) for connection preservation
+    std::string call_text;
+    for (int l = extent.start_line; l <= extent.end_line; ++l) {
+        int col_s = (l == extent.start_line) ? extent.start_col : 0;
+        int col_e = (l == extent.end_line)   ? extent.end_col   : (int)lines[l].size();
+        call_text += lines[l].substr(col_s, col_e - col_s);
+        if (l < extent.end_line) call_text += '\n';
+    }
     auto wire_map = parse_existing_connections(call_text);
 
     // Look up function/task ports
@@ -255,8 +261,8 @@ std::optional<lsWorkspaceEdit> autofunc(
     // Build workspace edit
     lsWorkspaceEdit we;
     lsTextEdit edit;
-    edit.range.start = lsPosition(line, extent.start_col);
-    edit.range.end = lsPosition(line, extent.end_col);
+    edit.range.start = lsPosition(extent.start_line, extent.start_col);
+    edit.range.end   = lsPosition(extent.end_line,   extent.end_col);
     edit.newText = new_call;
     we.changes = std::map<std::string, std::vector<lsTextEdit>>{};
     (*we.changes)[uri] = {edit};
