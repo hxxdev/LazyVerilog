@@ -45,13 +45,13 @@ Controls output casing for SystemVerilog keywords.
 
 Maximum number of blank lines preserved between items.
 
-### `default_indent_level_inside_module_block`
+### `default_indent_level_inside_outmost_block`
 
 | type | default |
 |------|---------|
 | int | `1` |
 
-Extra indentation levels applied inside `module ... endmodule`.
+Extra indentation levels applied inside outmost `module`, `interface`, and `package` blocks.
 
 ### `tab_align`
 
