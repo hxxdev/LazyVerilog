@@ -73,7 +73,7 @@ struct FormatOptions {
     bool compact_indexing_and_selections{true};
     std::string keyword_case{"preserve"};
     int  blank_lines_between_items{1};
-    int  default_indent_level_inside_module_block{1};
+    int  default_indent_level_inside_outmost_block{1};
     bool tab_align{false};
     bool align_punctuation{false};
     bool enable_format_on_save{false};

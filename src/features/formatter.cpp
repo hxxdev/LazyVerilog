@@ -1330,7 +1330,13 @@ static std::string align_var_pass(const std::string& text, const FormatOptions& 
     }
 
     auto is_var_idx = [&](int idx) -> bool {
-        return kinds && kinds->count(idx) && kinds->at(idx) == LineKind::VarDecl;
+        if (kinds)
+            return kinds->count(idx) && kinds->at(idx) == LineKind::VarDecl;
+        VarParsed* parsed = parse_var_line(lines[(size_t)idx]);
+        if (!parsed)
+            return false;
+        delete parsed;
+        return true;
     };
 
     std::vector<std::string> out;
@@ -1338,7 +1344,7 @@ static std::string align_var_pass(const std::string& text, const FormatOptions& 
     while (i < lines.size()) {
         const std::string& line = lines[i];
 
-        // Enter a block only if slang classified this line as VarDecl
+        // Enter a block only if this line is a variable declaration.
         if (!is_var_idx((int)i)) {
             out.push_back(line);
             ++i;
@@ -1727,6 +1733,11 @@ static std::string expand_instances_pass(const std::string& text, const FormatOp
             ++i;
             continue;
         }
+        if (line.find('(', word_end) == std::string::npos) {
+            out.push_back(line);
+            ++i;
+            continue;
+        }
 
         // Extract leading whitespace
         std::string indent;
@@ -1778,7 +1789,7 @@ static std::string expand_instances_pass(const std::string& text, const FormatOp
             max_port = std::max(max_port, (int)p.size());
             max_sig = std::max(max_sig, (int)s.size());
         }
-        int eff_before = std::max(1, m_before - max_port);
+        int eff_before = std::max(1, m_before - max_port - 1);
         int eff_inside = std::max(0, m_inside - max_sig);
 
         std::string hdr = indent + module_type;
@@ -1950,11 +1961,7 @@ static std::string format_function_calls_pass(const std::string& text, const For
             }
             return true;
         };
-        if (is_bare_id(prefix_trimmed) || prefix_lower.find("if") != std::string::npos ||
-            prefix_lower.find("while") != std::string::npos ||
-            prefix_lower.find("for") != std::string::npos ||
-            prefix_lower.find("repeat") != std::string::npos ||
-            prefix_lower.find("function") != std::string::npos ||
+        if (is_bare_id(prefix_trimmed) || prefix_lower.find("function") != std::string::npos ||
             prefix_lower.find("task") != std::string::npos ||
             prefix_lower.find("module") != std::string::npos ||
             prefix_lower.find("class") != std::string::npos) {
@@ -2433,8 +2440,8 @@ std::string format_source(const std::string& source, const FormatOptions& opts,
     // indent_level — current nesting depth (in units of indent_unit).
     // indent_stack — stack of how much each INDENT_OPEN keyword added, so
     //               the matching INDENT_CLOSE can pop the exact same amount.
-    //               (modules add opts.default_indent_level_inside_module_block,
-    //                everything else adds 1.)
+    //               (outmost module/interface/package blocks add
+    //                opts.default_indent_level_inside_outmost_block, everything else adds 1.)
     int indent_level = 0;
     std::vector<int> indent_stack;
 
@@ -2813,12 +2820,12 @@ std::string format_source(const std::string& source, const FormatOptions& opts,
                 single_stmt_pending = false;
 
             if (has(INDENT_OPEN, tok.lo)) {
-                // Keywords that increase indentation for everything inside them:
-                // module, begin, function, task, fork, …
-                // Modules use a configurable delta (default 1, but configurable);
+                // Keywords that increase indentation for everything inside them.
+                // Outmost design blocks use a configurable delta (default 1);
                 // everything else adds exactly 1 level.
-                int delta = (tok.lo == "module" || tok.lo == "macromodule")
-                                ? opts.default_indent_level_inside_module_block
+                int delta = (tok.lo == "module" || tok.lo == "macromodule" ||
+                             tok.lo == "interface" || tok.lo == "package")
+                                ? opts.default_indent_level_inside_outmost_block
                                 : 1;
                 indent_level += delta;
                 indent_stack.push_back(delta);
@@ -2937,17 +2944,14 @@ std::string format_source(const std::string& source, const FormatOptions& opts,
     // before the alignment passes see them.
     //
     // After format_portlist_pass, line numbers shift (expanded headers add
-    // lines), making fk stale.  Alignment passes use nullptr so they rely
-    // on syntactic detection (starts_with_port_dir, identifier-not-keyword)
-    // which works correctly on all lines regardless of origin.
-    // assign/var passes still use fk because they target different LineKinds
-    // and format_portlist_pass does not add assignment or variable lines.
+    // lines), making fk stale.  Alignment passes that run after it use
+    // syntactic detection on the formatted text.
     // -----------------------------------------------------------------------
     out = format_portlist_pass(out, opts, fk); // expand module header port lists
     if (opts.statement.align)
         out = align_assign_pass(out, opts, fk); // align `=` in assignments
     if (opts.var_declaration.align)
-        out = align_var_pass(out, opts, fk); // align variable declarations
+        out = align_var_pass(out, opts, nullptr); // align variable declarations (syntactic)
     if (opts.port_declaration.align)
         out = align_port_pass(out, opts, nullptr); // align port decl columns (syntactic)
     if (opts.instance.align)
