@@ -3,7 +3,7 @@ vcode = "demo/vcode.f"
 define = ["RTL_SIM"]   # preprocessor defines passed to pyslang for AST parsing
 
 [compilation]
-background_compilation = true # run semantic compilation in background workers (slower, richer diagnostics)
+background_compilation = false # run semantic compilation in background workers (slower, richer diagnostics)
 background_compilation_threads = 1 # max background semantic compilation workers; keep at 1 on shared/HPC systems
 background_compilation_debounce_ms = 10000 # wait after edits before starting semantic compilation
 log_timing = false              # emit [compilation] timing lines to the LSP log for profiling
@@ -48,7 +48,7 @@ explicit_begin = true # check that Verilog begin directive follows all applicabl
 enable = true
 severity = "warning"          # "warning" | "error" | "hint"
 functions_automatic = false   # functions should be automatic type
-function_call_style = "positional"      # "positional", "named", or "both"
+function_call_style = "positional2"      # "positional", "named", or "both"
 explicit_function_lifetime = true  # check that functions have explicit lifetime (static/automatic)
 explicit_task_lifetime = true    # check that tasks have explicit lifetime (static/automatic)
 

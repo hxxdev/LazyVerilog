@@ -1,7 +1,46 @@
 #include "config.hpp"
 #include <filesystem>
+#include <initializer_list>
 #include <iostream>
 #include <toml++/toml.hpp>
+
+static std::vector<std::string> validate_config(const Config& cfg) {
+    std::vector<std::string> errors;
+
+    auto check_severity = [&](const std::string& val, const char* ctx) {
+        if (!val.empty() && val != "warning" && val != "error" && val != "hint")
+            errors.push_back(std::string(ctx) + ": invalid severity \"" + val +
+                             "\" (must be \"warning\", \"error\", or \"hint\")");
+    };
+    check_severity(cfg.lint.function.severity, "[lint.function].severity");
+    check_severity(cfg.lint.statement.severity, "[lint.statement].severity");
+    check_severity(cfg.lint.module.severity, "[lint.module].severity");
+    check_severity(cfg.lint.naming.severity, "[lint.naming].severity");
+
+    auto check_enum = [&](const std::string& val, const char* ctx,
+                          std::initializer_list<const char*> valid) {
+        if (val.empty())
+            return;
+        for (auto v : valid)
+            if (val == v)
+                return;
+        std::string msg = std::string(ctx) + ": invalid value \"" + val + "\" (must be one of:";
+        for (auto v : valid)
+            msg += std::string(" \"") + v + "\"";
+        msg += ")";
+        errors.push_back(msg);
+    };
+    check_enum(cfg.lint.module.module_instantiation_style,
+               "[lint.module].module_instantiation_style", {"positional", "named", "both"});
+    check_enum(cfg.lint.function.function_call_style, "[lint.function].function_call_style",
+               {"positional", "named", "both"});
+    check_enum(cfg.format.keyword_case, "[format].keyword_case", {"preserve", "upper", "lower"});
+    check_enum(cfg.format.function.break_policy, "[format.function_call].break_policy",
+               {"auto", "always", "never"});
+    check_enum(cfg.format.function.layout, "[format.function_call].layout", {"block", "hanging"});
+
+    return errors;
+}
 
 std::filesystem::path find_config_root(const std::filesystem::path& start) {
     auto dir = std::filesystem::is_directory(start) ? start : start.parent_path();
@@ -271,7 +310,7 @@ Config load_config(const std::filesystem::path& root, std::string* warning,
 
     } catch (const toml::parse_error& e) {
         const auto& pos = e.source().begin;
-        std::string msg = "[lazyverilog] lazyverilog.toml parse error";
+        std::string msg = "lazyverilog.toml parse error";
         if (pos)
             msg +=
                 " at line " + std::to_string(pos.line) + ", column " + std::to_string(pos.column);
@@ -287,7 +326,7 @@ Config load_config(const std::filesystem::path& root, std::string* warning,
             warning_detail->message = msg;
         }
     } catch (const std::exception& e) {
-        std::string msg = std::string("[lazyverilog] config load error: ") + e.what();
+        std::string msg = std::string("config load error: ") + e.what();
         std::cerr << msg << "\n";
         if (warning)
             *warning = msg;
@@ -296,7 +335,7 @@ Config load_config(const std::filesystem::path& root, std::string* warning,
             warning_detail->message = msg;
         }
     } catch (...) {
-        std::string msg = "[lazyverilog] config load error";
+        std::string msg = "config load error";
         std::cerr << msg << "\n";
         if (warning)
             *warning = msg;
@@ -305,5 +344,25 @@ Config load_config(const std::filesystem::path& root, std::string* warning,
             warning_detail->message = msg;
         }
     }
+
+    // Validate enum/string fields (only when no parse error set a warning)
+    if (!warning || warning->empty()) {
+        auto val_errors = validate_config(cfg);
+        if (!val_errors.empty()) {
+            std::string msg = "lazyverilog.toml value error(s):";
+            for (const auto& e : val_errors)
+                msg += "\n  " + e;
+            std::cerr << msg << "\n";
+            if (warning)
+                *warning = msg;
+            if (warning_detail) {
+                warning_detail->path = toml_path;
+                warning_detail->line = 0;
+                warning_detail->column = 0;
+                warning_detail->message = msg;
+            }
+        }
+    }
+
     return cfg;
 }

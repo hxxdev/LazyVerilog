@@ -238,21 +238,60 @@ struct LintVisitor : public SyntaxVisitor<LintVisitor> {
         visitDefault(node);
     }
 
-    // ── module_instantiation_style (bool: true → require named connections) ─
+    // ── function_call_style: "named" | "positional" | "both" ─────────────────
+    void handle(const InvocationExpressionSyntax& node) {
+        const auto& style = cfg.function.function_call_style;
+        if (!style.empty() && node.arguments) {
+            bool has_positional = false, has_named = false;
+            for (auto* arg : node.arguments->parameters) {
+                if (!arg) continue;
+                if (arg->as_if<OrderedArgumentSyntax>())
+                    has_positional = true;
+                else if (arg->as_if<NamedArgumentSyntax>())
+                    has_named = true;
+            }
+            auto fn_sev = cfg.function.enable ? (cfg.function.severity == "error"   ? 1
+                                                 : cfg.function.severity == "hint"   ? 3
+                                                                                      : 2)
+                                              : 2;
+            if (style == "named" && has_positional)
+                diags.push_back(make_diag(sm, node.left->getFirstToken().location(), fn_sev,
+                    "[function] call uses positional arguments; named arguments required"));
+            else if (style == "positional" && has_named)
+                diags.push_back(make_diag(sm, node.left->getFirstToken().location(), fn_sev,
+                    "[function] call uses named arguments; positional arguments required"));
+            else if (style == "both" && has_positional && has_named)
+                diags.push_back(make_diag(sm, node.left->getFirstToken().location(), fn_sev,
+                    "[function] call mixes positional and named arguments"));
+        }
+        visitDefault(node);
+    }
+
+    // ── module_instantiation_style: "named" | "positional" | "both" ─────────
     void handle(const HierarchyInstantiationSyntax& node) {
-        if (!cfg.module.module_instantiation_style.empty()) {
+        const auto& style = cfg.module.module_instantiation_style;
+        if (!style.empty()) {
             for (uint32_t i = 0; i < node.instances.size(); ++i) {
                 const auto* inst = node.instances[i];
                 if (!inst) continue;
-                bool positional = false;
-                for (uint32_t j = 0; j < inst->connections.size() && !positional; ++j) {
-                    if (const auto* conn = inst->connections[j])
+                bool has_positional = false, has_named = false;
+                for (uint32_t j = 0; j < inst->connections.size(); ++j) {
+                    if (const auto* conn = inst->connections[j]) {
                         if (conn->as_if<OrderedPortConnectionSyntax>())
-                            positional = true;
+                            has_positional = true;
+                        else if (conn->as_if<NamedPortConnectionSyntax>())
+                            has_named = true;
+                    }
                 }
-                if (positional)
-                    diags.push_back(make_diag(sm, node.type.location(), 2,
-                        "[module] instance uses positional port connections; named connections preferred"));
+                if (style == "named" && has_positional)
+                    diags.push_back(make_diag(sm, node.type.location(), module_sev(),
+                        "[module] instance uses positional port connections; named connections required"));
+                else if (style == "positional" && has_named)
+                    diags.push_back(make_diag(sm, node.type.location(), module_sev(),
+                        "[module] instance uses named port connections; positional connections required"));
+                else if (style == "both" && has_positional && has_named)
+                    diags.push_back(make_diag(sm, node.type.location(), module_sev(),
+                        "[module] instance mixes positional and named port connections"));
             }
         }
         if (cfg.module.stale_autoinst_diagnostic) {
@@ -515,7 +554,8 @@ std::vector<ParseDiagInfo> run_lint(const DocumentState& state, const LintConfig
         config.naming.check_package_filename);
     if (!config.statement.case_missing_default && !config.function.functions_automatic &&
         !config.function.explicit_function_lifetime && !config.function.explicit_task_lifetime &&
-        config.module.module_instantiation_style.empty() && !config.module.one_module_per_file &&
+        config.module.module_instantiation_style.empty() && config.function.function_call_style.empty() &&
+        !config.module.one_module_per_file &&
         !config.module.stale_autoinst_diagnostic && !config.statement.latch_inference_detection &&
         !config.statement.explicit_begin && !config.statement.no_raw_always &&
         !config.statement.blocking_nonblocking_assignments && config.naming.register_pattern.empty() &&
