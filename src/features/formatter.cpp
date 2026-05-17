@@ -2,14 +2,15 @@
 #include <algorithm>
 #include <cctype>
 #include <regex>
-#include <sstream>
-#include <unordered_map>
-#include <unordered_set>
-#include <vector>
+#include <slang/parsing/Token.h>
 #include <slang/syntax/AllSyntax.h>
 #include <slang/syntax/SyntaxTree.h>
 #include <slang/syntax/SyntaxVisitor.h>
 #include <slang/text/SourceManager.h>
+#include <sstream>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 using namespace slang;
 using namespace slang::syntax;
@@ -30,124 +31,136 @@ struct LineClassifier : SyntaxVisitor<LineClassifier> {
 
     int line_of(const SyntaxNode& node) const {
         auto tok = node.getFirstToken();
-        if (!tok || !tok.location().valid()) return -1;
+        if (!tok || !tok.location().valid())
+            return -1;
         return (int)sm.getLineNumber(tok.location()) - 1; // convert to 0-based
     }
 
     void set(const SyntaxNode& node, LineKind k) {
         int ln = line_of(node);
-        if (ln >= 0) kinds.emplace(ln, k);
+        if (ln >= 0)
+            kinds.emplace(ln, k);
     }
 
-    void handle(const ImplicitAnsiPortSyntax& n)       { set(n, LineKind::PortDecl);     visitDefault(n); }
-    void handle(const PortDeclarationSyntax& n)        { set(n, LineKind::PortDecl);     visitDefault(n); }
-    void handle(const DataDeclarationSyntax& n)        { set(n, LineKind::VarDecl);      visitDefault(n); }
-    void handle(const NetDeclarationSyntax& n)         { set(n, LineKind::VarDecl);      visitDefault(n); }
-    void handle(const HierarchyInstantiationSyntax& n) { set(n, LineKind::Instantiation);visitDefault(n); }
-    void handle(const ModuleDeclarationSyntax& n)      { set(n, LineKind::ModuleHeader); visitDefault(n); }
+    void handle(const ImplicitAnsiPortSyntax& n) {
+        set(n, LineKind::PortDecl);
+        visitDefault(n);
+    }
+    void handle(const PortDeclarationSyntax& n) {
+        set(n, LineKind::PortDecl);
+        visitDefault(n);
+    }
+    void handle(const DataDeclarationSyntax& n) {
+        set(n, LineKind::VarDecl);
+        visitDefault(n);
+    }
+    void handle(const NetDeclarationSyntax& n) {
+        set(n, LineKind::VarDecl);
+        visitDefault(n);
+    }
+    void handle(const HierarchyInstantiationSyntax& n) {
+        set(n, LineKind::Instantiation);
+        visitDefault(n);
+    }
+    void handle(const ModuleDeclarationSyntax& n) {
+        if (n.kind == SyntaxKind::ModuleDeclaration)
+            set(n, LineKind::ModuleHeader);
+        visitDefault(n);
+    }
 };
 
 // ---------------------------------------------------------------------------
-// Token types — mirrors FTT enum in formatter.py
+// CST formatting token helpers
 // ---------------------------------------------------------------------------
 
-enum class FTT {
-    Unknown, Whitespace, Identifier, Keyword, NumericLiteral, StringLiteral,
-    UnaryOperator, BinaryOperator, OpenGroup, CloseGroup, Hierarchy,
-    CommentBlock, EolComment, Semicolon, Comma, Colon, Hash, AtSign,
-    IncludeDirective,
+using slang::parsing::TokenKind;
+
+struct Tok {
+    TokenKind kind{TokenKind::Unknown};
+    std::string text;
+    std::string lo;
+    int pos{0};
+    bool whitespace{false};
+    bool comment{false};
+    bool directive{false};
 };
 
 enum class SD { MustAppend, MustWrap, Preserve, Undecided };
-
-struct Tok {
-    FTT ftt;
-    std::string text;
-    std::string lo;  // lowercase
-    int pos{0};
-};
 
 // ---------------------------------------------------------------------------
 // Keyword sets
 // ---------------------------------------------------------------------------
 
 static const std::unordered_set<std::string> SV_KW = {
-    "module","macromodule","endmodule","interface","endinterface",
-    "program","endprogram","package","endpackage","class","endclass",
-    "function","endfunction","task","endtask","begin","end",
-    "fork","join","join_any","join_none",
-    "case","casex","casez","caseinside","endcase",
-    "generate","endgenerate","covergroup","endgroup",
-    "property","endproperty","sequence","endsequence",
-    "checker","endchecker","clocking","endclocking",
-    "config","endconfig","primitive","endprimitive",
-    "specify","endspecify","table","endtable",
-    "input","output","inout","ref",
-    "logic","wire","reg","bit","byte","shortint","int","longint",
-    "integer","real","realtime","shortreal","time","string","chandle","event",
-    "always","always_comb","always_ff","always_latch","initial","final","assign",
-    "if","else","for","foreach","while","do","repeat","forever",
-    "return","break","continue",
-    "typedef","struct","union","enum","packed","unpacked",
-    "parameter","localparam","defparam",
-    "virtual","static","automatic","const","var",
-    "default","void","type","signed","unsigned","modport","genvar",
-    "import","export","extern","protected","local",
-    "posedge","negedge","edge","or","and","not",
-    "assert","assume","cover","restrict",
-    "unique","unique0","priority",
-    "inside","dist","rand","randc","constraint",
-    "super","this","null","new",
-    "expect","wait","wait_order","disable","force","release",
-    "deassign","pullup","pulldown",
-    "supply0","supply1","tri","tri0","tri1","triand","trior","trireg",
-    "wand","wor","uwire",
-    "with","bind","let","cross","bins","binsof",
-    "extends","implements","throughout","within","iff","intersect","first_match",
-    "matches","tagged","wildcard","solve","before","pure","context",
-    "timeprecision","timeunit","forkjoin","randcase","randsequence","randomize",
-    "coverpoint","strong","weak",
+    "module",      "macromodule", "endmodule",    "interface",    "endinterface",  "program",
+    "endprogram",  "package",     "endpackage",   "class",        "endclass",      "function",
+    "endfunction", "task",        "endtask",      "begin",        "end",           "fork",
+    "join",        "join_any",    "join_none",    "case",         "casex",         "casez",
+    "caseinside",  "endcase",     "generate",     "endgenerate",  "covergroup",    "endgroup",
+    "property",    "endproperty", "sequence",     "endsequence",  "checker",       "endchecker",
+    "clocking",    "endclocking", "config",       "endconfig",    "primitive",     "endprimitive",
+    "specify",     "endspecify",  "table",        "endtable",     "input",         "output",
+    "inout",       "ref",         "logic",        "wire",         "reg",           "bit",
+    "byte",        "shortint",    "int",          "longint",      "integer",       "real",
+    "realtime",    "shortreal",   "time",         "string",       "chandle",       "event",
+    "always",      "always_comb", "always_ff",    "always_latch", "initial",       "final",
+    "assign",      "if",          "else",         "for",          "foreach",       "while",
+    "do",          "repeat",      "forever",      "return",       "break",         "continue",
+    "typedef",     "struct",      "union",        "enum",         "packed",        "unpacked",
+    "parameter",   "localparam",  "defparam",     "virtual",      "static",        "automatic",
+    "const",       "var",         "default",      "void",         "type",          "signed",
+    "unsigned",    "modport",     "genvar",       "import",       "export",        "extern",
+    "protected",   "local",       "posedge",      "negedge",      "edge",          "or",
+    "and",         "not",         "assert",       "assume",       "cover",         "restrict",
+    "unique",      "unique0",     "priority",     "inside",       "dist",          "rand",
+    "randc",       "constraint",  "super",        "this",         "null",          "new",
+    "expect",      "wait",        "wait_order",   "disable",      "force",         "release",
+    "deassign",    "pullup",      "pulldown",     "supply0",      "supply1",       "tri",
+    "tri0",        "tri1",        "triand",       "trior",        "trireg",        "wand",
+    "wor",         "uwire",       "with",         "bind",         "let",           "cross",
+    "bins",        "binsof",      "extends",      "implements",   "throughout",    "within",
+    "iff",         "intersect",   "first_match",  "matches",      "tagged",        "wildcard",
+    "solve",       "before",      "pure",         "context",      "timeprecision", "timeunit",
+    "forkjoin",    "randcase",    "randsequence", "randomize",    "coverpoint",    "strong",
+    "weak",
 };
 
 static const std::unordered_set<std::string> TYPE_KW = {
-    "logic","wire","reg","bit","byte","shortint","int","longint",
-    "integer","real","realtime","shortreal","time","string","chandle",
-    "event","void","signed","unsigned","packed",
+    "logic",   "wire",    "reg",  "bit",      "byte",      "shortint", "int",
+    "longint", "integer", "real", "realtime", "shortreal", "time",     "string",
+    "chandle", "event",   "void", "signed",   "unsigned",  "packed",
 };
 
 static const std::unordered_set<std::string> INDENT_OPEN = {
-    "module","macromodule","interface","program","package","class",
-    "function","task","begin","fork",
-    "case","casex","casez","caseinside",
-    "generate","covergroup","property","sequence",
-    "checker","clocking","config","primitive","specify",
+    "module",   "macromodule", "interface", "program",    "package",  "class",
+    "function", "task",        "begin",     "fork",       "case",     "casex",
+    "casez",    "caseinside",  "generate",  "covergroup", "property", "sequence",
+    "checker",  "clocking",    "config",    "primitive",  "specify",
 };
 
 static const std::unordered_set<std::string> BLOCK_OPEN = {
-    "begin","fork","case","casex","casez","caseinside",
-    "generate","covergroup","property","sequence",
-    "checker","clocking","config","primitive","specify",
+    "begin",    "fork",     "case",    "casex",    "casez",  "caseinside", "generate", "covergroup",
+    "property", "sequence", "checker", "clocking", "config", "primitive",  "specify",
 };
 
 static const std::unordered_set<std::string> INDENT_CLOSE = {
-    "endmodule","endinterface","endprogram","endpackage","endclass",
-    "endfunction","endtask","end","join","join_any","join_none",
-    "endcase","endgenerate","endgroup","endproperty","endsequence",
-    "endchecker","endclocking","endconfig","endprimitive","endspecify","endtable",
+    "endmodule",   "endinterface", "endprogram",  "endpackage",  "endclass",   "endfunction",
+    "endtask",     "end",          "join",        "join_any",    "join_none",  "endcase",
+    "endgenerate", "endgroup",     "endproperty", "endsequence", "endchecker", "endclocking",
+    "endconfig",   "endprimitive", "endspecify",  "endtable",
 };
 
 static const std::unordered_set<std::string> ALWAYS_UNARY = {
-    "~","!","~&","~|","~^","^~","++","--",
+    "~", "!", "~&", "~|", "~^", "^~", "++", "--",
 };
 
 static const std::unordered_set<std::string> ALWAYS_BINARY = {
-    "===","!==","==","!=",">=","->","<->","&&","||","**","##","|->",
-    "+=","-=","*=","/=","%=","&=","|=","^=","<<=",">>=","<<<=",">>>=",
-    "*","/","%",
+    "===", "!==", "==", "!=", ">=", "->", "<->", "&&",  "||",   "**",   "##", "|->", "+=", "-=",
+    "*=",  "/=",  "%=", "&=", "|=", "^=", "<<=", ">>=", "<<<=", ">>>=", "*",  "/",   "%",
 };
 
-static const std::unordered_set<std::string> PP_COND_WITH = {"`ifdef","`ifndef","`elsif"};
-static const std::unordered_set<std::string> PP_COND_BARE = {"`else","`endif"};
+static const std::unordered_set<std::string> PP_COND_WITH = {"`ifdef", "`ifndef", "`elsif"};
+static const std::unordered_set<std::string> PP_COND_BARE = {"`else", "`endif"};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -155,7 +168,8 @@ static const std::unordered_set<std::string> PP_COND_BARE = {"`else","`endif"};
 
 static std::string lower(const std::string& s) {
     std::string r = s;
-    for (auto& c : r) c = (char)std::tolower((unsigned char)c);
+    for (auto& c : r)
+        c = (char)std::tolower((unsigned char)c);
     return r;
 }
 
@@ -163,212 +177,47 @@ static bool has(const std::unordered_set<std::string>& s, const std::string& k) 
     return s.count(k) > 0;
 }
 
-// ---------------------------------------------------------------------------
-// Tokenizer
-// ---------------------------------------------------------------------------
+static bool is_keyword(const Tok& t) {
+    return !t.directive && !t.comment && !t.whitespace && has(SV_KW, t.lo);
+}
 
-static std::vector<Tok> tokenize(const std::string& src) {
-    std::vector<Tok> toks;
-    int n = (int)src.size();
-    int i = 0;
-    FTT prev = FTT::Unknown;
+static bool is_identifier(const Tok& t) {
+    return !t.directive && !t.comment && !t.whitespace &&
+           (t.kind == TokenKind::Identifier || t.kind == TokenKind::SystemIdentifier ||
+            (!t.text.empty() &&
+             (std::isalpha((unsigned char)t.text[0]) || t.text[0] == '_' || t.text[0] == '$' ||
+              t.text[0] == '`') &&
+             !is_keyword(t)));
+}
 
-    auto push = [&](FTT f, int s, int e) {
-        Tok t;
-        t.ftt = f;
-        t.text = src.substr(s, e - s);
-        t.lo   = lower(t.text);
-        t.pos  = s;
-        toks.push_back(std::move(t));
-        if (f != FTT::Whitespace && f != FTT::Unknown) prev = f;
-    };
+static bool is_numeric(const Tok& t) {
+    return t.kind == TokenKind::IntegerLiteral || t.kind == TokenKind::IntegerBase ||
+           t.kind == TokenKind::UnbasedUnsizedLiteral || t.kind == TokenKind::RealLiteral ||
+           t.kind == TokenKind::TimeLiteral;
+}
 
-    while (i < n) {
-        char c = src[i];
+static bool is_open_group(const Tok& t) { return t.text == "(" || t.text == "[" || t.text == "{"; }
 
-        // Whitespace
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
-            int s = i;
-            while (i < n && (src[i]==' '||src[i]=='\t'||src[i]=='\r'||src[i]=='\n')) ++i;
-            push(FTT::Whitespace, s, i);
-            continue;
-        }
+static bool is_close_group(const Tok& t) { return t.text == ")" || t.text == "]" || t.text == "}"; }
 
-        // EOL comment
-        if (c=='/' && i+1<n && src[i+1]=='/') {
-            int s = i;
-            while (i<n && src[i]!='\n') ++i;
-            push(FTT::EolComment, s, i);
-            continue;
-        }
+static bool is_hierarchy(const Tok& t) { return t.text == "." || t.text == "::"; }
 
-        // Block comment
-        if (c=='/' && i+1<n && src[i+1]=='*') {
-            int s = i; i += 2;
-            while (i+1<n && !(src[i]=='*' && src[i+1]=='/')) ++i;
-            if (i+1<n) i += 2;
-            push(FTT::CommentBlock, s, i);
-            continue;
-        }
+static bool is_unary_op(const Tok& t) { return has(ALWAYS_UNARY, t.text); }
 
-        // String literal
-        if (c=='"') {
-            int s = i++;
-            while (i<n && src[i]!='"') { if (src[i]=='\\') ++i; ++i; }
-            if (i<n) ++i;
-            push(FTT::StringLiteral, s, i);
-            continue;
-        }
-
-        // `include directive
-        if (c=='`' && src.compare(i,8,"`include")==0
-                && (i+8>=(size_t)n || !std::isalnum((unsigned char)src[i+8]))) {
-            int s = i; i += 8;
-            while (i<n && (src[i]==' '||src[i]=='\t')) ++i;
-            if (i<n && src[i]=='"') {
-                ++i;
-                while (i<n && src[i]!='"') ++i;
-                if (i<n) ++i;
-            }
-            push(FTT::IncludeDirective, s, i);
-            continue;
-        }
-
-        // Based literal starting with digits: 4'b... or plain number
-        if (std::isdigit((unsigned char)c)) {
-            int s = i;
-            while (i<n && std::isdigit((unsigned char)src[i])) ++i;
-            if (i<n && src[i]=='\'') {
-                char nc = (i+1<n) ? (char)std::tolower((unsigned char)src[i+1]) : 0;
-                if (nc=='b'||nc=='o'||nc=='d'||nc=='h'||nc=='x') {
-                    ++i; ++i;
-                    while (i<n && (std::isalnum((unsigned char)src[i])||src[i]=='_')) ++i;
-                    push(FTT::NumericLiteral, s, i);
-                    continue;
-                }
-            }
-            while (i<n && (std::isalnum((unsigned char)src[i])||src[i]=='.'||src[i]=='_')) ++i;
-            push(FTT::NumericLiteral, s, i);
-            continue;
-        }
-
-        // Unbased literal '0 '1 'x 'z 'b... etc.
-        if (c=='\'') {
-            char nc = (i+1<n) ? (char)std::tolower((unsigned char)src[i+1]) : 0;
-            if (nc=='b'||nc=='o'||nc=='d'||nc=='h'||nc=='0'||nc=='1'||nc=='x'||nc=='z') {
-                int s = i; i += 2;
-                while (i<n && (std::isalnum((unsigned char)src[i])||src[i]=='_')) ++i;
-                push(FTT::NumericLiteral, s, i);
-                continue;
-            }
-            // cast operator or bare quote — Unknown
-            push(FTT::Unknown, i, i+1); ++i;
-            continue;
-        }
-
-        // :: (scope)
-        if (c==':' && i+1<n && src[i+1]==':') {
-            push(FTT::Hierarchy, i, i+2); i += 2; continue;
-        }
-
-        // Word: identifier, keyword, SV macro
-        if (std::isalpha((unsigned char)c)||c=='_'||c=='`'||c=='$') {
-            int s = i++;
-            while (i<n && (std::isalnum((unsigned char)src[i])||src[i]=='_'||src[i]=='$')) ++i;
-            std::string w = src.substr(s, i-s);
-            std::string wl = lower(w);
-            FTT f = has(SV_KW, wl) ? FTT::Keyword : FTT::Identifier;
-            Tok t; t.ftt=f; t.text=w; t.lo=wl; t.pos=s;
-            toks.push_back(std::move(t));
-            prev = f;
-            continue;
-        }
-
-        // Multi-char operators — longest first
-        {
-            static const struct { const char* s; size_t n; FTT f; } mops[] = {
-                {"<<<=",4,FTT::BinaryOperator},{">>>=",4,FTT::BinaryOperator},
-                {"===",3,FTT::BinaryOperator},{"!==",3,FTT::BinaryOperator},
-                {"<<=",3,FTT::BinaryOperator},{">>=",3,FTT::BinaryOperator},
-                {"<<<",3,FTT::BinaryOperator},{">>>",3,FTT::BinaryOperator},
-                {"<->",3,FTT::BinaryOperator},
-                {"|->",3,FTT::BinaryOperator},
-                {"==",2,FTT::BinaryOperator},{"!=",2,FTT::BinaryOperator},
-                {"<=",2,FTT::BinaryOperator},{">=",2,FTT::BinaryOperator},
-                {"->",2,FTT::BinaryOperator},
-                {"+=",2,FTT::BinaryOperator},{"-=",2,FTT::BinaryOperator},
-                {"*=",2,FTT::BinaryOperator},{"/=",2,FTT::BinaryOperator},
-                {"%=",2,FTT::BinaryOperator},{"&=",2,FTT::BinaryOperator},
-                {"|=",2,FTT::BinaryOperator},{"^=",2,FTT::BinaryOperator},
-                {"<<",2,FTT::BinaryOperator},{">>",2,FTT::BinaryOperator},
-                {"##",2,FTT::BinaryOperator},
-                {"&&",2,FTT::BinaryOperator},{"||",2,FTT::BinaryOperator},
-                {"**",2,FTT::BinaryOperator},
-                {"++",2,FTT::UnaryOperator},{"--",2,FTT::UnaryOperator},
-                {"~&",2,FTT::UnaryOperator},{"~|",2,FTT::UnaryOperator},
-                {"~^",2,FTT::UnaryOperator},{"^~",2,FTT::UnaryOperator},
-            };
-            bool matched = false;
-            for (auto& m : mops) {
-                if (i+(int)m.n <= n && src.compare(i, m.n, m.s)==0) {
-                    push(m.f, i, i+(int)m.n);
-                    i += (int)m.n;
-                    matched = true;
-                    break;
-                }
-            }
-            if (matched) continue;
-        }
-
-        // Open / close groups
-        if (c=='('||c=='['||c=='{') { push(FTT::OpenGroup, i, i+1); ++i; continue; }
-        if (c==')'||c==']'||c=='}') { push(FTT::CloseGroup, i, i+1); ++i; continue; }
-
-        // Punctuation with dedicated types
-        if (c==';') { push(FTT::Semicolon, i, i+1); ++i; continue; }
-        if (c==',') { push(FTT::Comma,     i, i+1); ++i; continue; }
-        if (c=='.') { push(FTT::Hierarchy, i, i+1); ++i; continue; }
-        if (c==':') { push(FTT::Colon,     i, i+1); ++i; continue; }
-        if (c=='#') { push(FTT::Hash,      i, i+1); ++i; continue; }
-        if (c=='@') { push(FTT::AtSign,    i, i+1); ++i; continue; }
-
-        // Single-char operators: context-sensitive unary/binary
-        if (c=='+'||c=='-'||c=='&'||c=='|'||c=='^'||c=='~'||c=='!'
-                ||c=='<'||c=='>'||c=='='||c=='?'||c=='*'||c=='/'||c=='%'||c=='\\') {
-            std::string op(1, c);
-            FTT f;
-            if (has(ALWAYS_UNARY, op)) {
-                f = FTT::UnaryOperator;
-            } else if (has(ALWAYS_BINARY, op)) {
-                f = FTT::BinaryOperator;
-            } else {
-                // context-sensitive: unary after op, open_group, or start
-                bool ctx_unary = (prev==FTT::Unknown||prev==FTT::BinaryOperator
-                                  ||prev==FTT::UnaryOperator||prev==FTT::OpenGroup);
-                if (ctx_unary && (c=='+'||c=='-'||c=='&'||c=='|'||c=='^'))
-                    f = FTT::UnaryOperator;
-                else
-                    f = FTT::BinaryOperator;
-            }
-            push(f, i, i+1); ++i; continue;
-        }
-
-        // Unknown
-        push(FTT::Unknown, i, i+1); ++i;
-    }
-    return toks;
+static bool is_binary_op(const Tok& t) {
+    static const std::unordered_set<std::string> EXTRA_BINARY = {
+        "<=", "<", ">", "=", "?", "<<", ">>", "<<<", ">>>", "->", "<->", "|->"};
+    return has(ALWAYS_BINARY, t.text) || has(EXTRA_BINARY, t.text);
 }
 
 // ---------------------------------------------------------------------------
 // Disabled ranges (verilog_format: off/on and `define)
 // ---------------------------------------------------------------------------
 
-static std::vector<std::pair<int,int>> find_disabled(const std::string& src) {
-    std::vector<std::pair<int,int>> out;
-    static const std::regex FMT_OFF(
-        R"(//\s*verilog_format\s*:\s*off\b[^\n]*)", std::regex::icase);
-    static const std::regex FMT_ON(
-        R"(//\s*verilog_format\s*:\s*on\b[^\n]*)", std::regex::icase);
+static std::vector<std::pair<int, int>> find_disabled(const std::string& src) {
+    std::vector<std::pair<int, int>> out;
+    static const std::regex FMT_OFF(R"(//\s*verilog_format\s*:\s*off\b[^\n]*)", std::regex::icase);
+    static const std::regex FMT_ON(R"(//\s*verilog_format\s*:\s*on\b[^\n]*)", std::regex::icase);
     static const std::regex DEFINE_RE(R"(`define\b(?:[^\n]*?\\\n)*[^\n]*)");
 
     {
@@ -376,27 +225,25 @@ static std::vector<std::pair<int,int>> find_disabled(const std::string& src) {
         for (; it != std::sregex_iterator(); ++it) {
             int off_pos = (int)it->position();
             int search_from = off_pos + (int)it->length();
-            auto it2 = std::sregex_iterator(
-                src.begin() + search_from, src.end(), FMT_ON);
-            int end = (it2 != std::sregex_iterator())
-                      ? search_from + (int)it2->position()
-                      : (int)src.size();
+            auto it2 = std::sregex_iterator(src.begin() + search_from, src.end(), FMT_ON);
+            int end = (it2 != std::sregex_iterator()) ? search_from + (int)it2->position()
+                                                      : (int)src.size();
             out.push_back({off_pos, end});
         }
     }
     {
         auto it = std::sregex_iterator(src.begin(), src.end(), DEFINE_RE);
         for (; it != std::sregex_iterator(); ++it)
-            out.push_back({(int)it->position(),
-                           (int)(it->position() + it->length())});
+            out.push_back({(int)it->position(), (int)(it->position() + it->length())});
     }
     std::sort(out.begin(), out.end());
     return out;
 }
 
-static bool in_disabled(int pos, const std::vector<std::pair<int,int>>& ranges) {
+static bool in_disabled(int pos, const std::vector<std::pair<int, int>>& ranges) {
     for (auto& r : ranges)
-        if (r.first <= pos && pos < r.second) return true;
+        if (r.first <= pos && pos < r.second)
+            return true;
     return false;
 }
 
@@ -404,62 +251,96 @@ static bool in_disabled(int pos, const std::vector<std::pair<int,int>>& ranges) 
 // Spacing rules — ported from SpacesRequiredBetween() in token-annotator.cc
 // ---------------------------------------------------------------------------
 
-static int spaces_req(const Tok& L, const Tok& R,
-                      const FormatOptions& opts, bool in_dim) {
-    auto lf=L.ftt; const auto& lx=L.text; const auto& ll=L.lo;
-    auto rf=R.ftt; const auto& rx=R.text;
+static int spaces_req(const Tok& L, const Tok& R, const FormatOptions& opts, bool in_dim) {
+    const auto& lx = L.text;
+    const auto& ll = L.lo;
+    const auto& rx = R.text;
 
-    if (lf==FTT::IncludeDirective||rf==FTT::IncludeDirective) return 0;
-    if (rf==FTT::EolComment||rf==FTT::CommentBlock) return 1;
-    if (lf==FTT::OpenGroup||rf==FTT::CloseGroup) return 0;
-    if (lf==FTT::UnaryOperator) return 0;
-    if (lf==FTT::Hierarchy&&lx=="::") return 0;
-    if (rf==FTT::Comma) return 0;
-    if (lf==FTT::Comma) return 1;
-    if (rf==FTT::Semicolon) return (lf==FTT::Colon)?1:0;
-    if (lf==FTT::Semicolon) return 1;
-    if (lf==FTT::AtSign) return 0;
-    if (rf==FTT::AtSign) return 1;
-    if (lf==FTT::UnaryOperator&&rx=="{") return 0;
-    if (lf==FTT::BinaryOperator||rf==FTT::BinaryOperator) {
-        if (rf==FTT::BinaryOperator&&in_dim&&opts.compact_indexing_and_selections) return 0;
-        if (lf==FTT::BinaryOperator&&in_dim) return 0;
+    if (L.directive || R.directive)
+        return 0;
+    if (R.comment)
+        return 1;
+    if (is_open_group(L) || is_close_group(R))
+        return 0;
+    if (is_unary_op(L))
+        return 0;
+    if (is_hierarchy(L) && lx == "::")
+        return 0;
+    if (rx == ",")
+        return 0;
+    if (lx == ",")
+        return 1;
+    if (rx == ";")
+        return (lx == ":") ? 1 : 0;
+    if (lx == ";")
+        return 1;
+    if (lx == "@")
+        return 0;
+    if (rx == "@")
+        return 1;
+    if (is_unary_op(L) && rx == "{")
+        return 0;
+    if (is_binary_op(L) || is_binary_op(R)) {
+        if (is_binary_op(R) && in_dim && opts.compact_indexing_and_selections)
+            return 0;
+        if (is_binary_op(L) && in_dim)
+            return 0;
         return 1;
     }
-    if (lf==FTT::Hierarchy||rf==FTT::Hierarchy) return 0;
-    if (rx=="'"||lx=="'") return 0;
-    if (rx=="(") {
-        if (lf==FTT::Hash) return 0;
-        if (lx==")") return 1;
-        if (lf==FTT::Identifier) return 0;
-        if (lf==FTT::Keyword) return 1;
+    if (is_hierarchy(L) || is_hierarchy(R))
+        return 0;
+    if (rx == "'" || lx == "'" || (!rx.empty() && rx[0] == '\'') || (!lx.empty() && lx[0] == '\''))
+        return 0;
+    if (rx == "(") {
+        if (lx == "#")
+            return 0;
+        if (lx == ")")
+            return 1;
+        if (is_identifier(L))
+            return 0;
+        if (is_keyword(L))
+            return 1;
         return 0;
     }
-    if (lf==FTT::Colon) return in_dim?0:1;
-    if (rf==FTT::Colon) {
-        if (ll=="default") return 0;
-        if (in_dim) return 0;
-        if (lf==FTT::Identifier||lf==FTT::NumericLiteral||lf==FTT::CloseGroup) return 0;
+    if (lx == ":")
+        return in_dim ? 0 : 1;
+    if (rx == ":") {
+        if (ll == "default")
+            return 0;
+        if (in_dim)
+            return 0;
+        if (is_identifier(L) || is_numeric(L) || is_close_group(L))
+            return 0;
         return 1;
     }
-    if (lx=="}") return 1;
-    if (rx=="{") return (lf==FTT::Keyword)?1:0;
-    if (rx=="[") {
-        if (lx=="]") return 0;
-        if (lf==FTT::Keyword&&has(TYPE_KW,ll)) return 1;
+    if (lx == "}")
+        return 1;
+    if (rx == "{")
+        return is_keyword(L) ? 1 : 0;
+    if (rx == "[") {
+        if (lx == "]")
+            return 0;
+        if (is_keyword(L) && has(TYPE_KW, ll))
+            return 1;
         return 0;
     }
-    auto nm=[](const Tok& t){
-        return t.ftt==FTT::NumericLiteral||t.ftt==FTT::Identifier||t.ftt==FTT::Keyword;
-    };
-    if (nm(L)&&nm(R)) return 1;
-    if (lf==FTT::Keyword) return 1;
-    if (lf==FTT::UnaryOperator||rf==FTT::UnaryOperator) return 0;
-    if (lf==FTT::Hash) return 0;
-    if (rf==FTT::Hash) return 1;
-    if (rf==FTT::Keyword) return 1;
-    if (lx==")") return (rf==FTT::Colon)?0:1;
-    if (lx=="]") return 1;
+    auto nm = [](const Tok& t) { return is_numeric(t) || is_identifier(t) || is_keyword(t); };
+    if (nm(L) && nm(R))
+        return 1;
+    if (is_keyword(L))
+        return 1;
+    if (is_unary_op(L) || is_unary_op(R))
+        return 0;
+    if (lx == "#")
+        return 0;
+    if (rx == "#")
+        return 1;
+    if (is_keyword(R))
+        return 1;
+    if (lx == ")")
+        return (rx == ":") ? 0 : 1;
+    if (lx == "]")
+        return 1;
     return 1;
 }
 
@@ -467,26 +348,37 @@ static int spaces_req(const Tok& L, const Tok& R,
 // Break decisions — ported from BreakDecisionBetween()
 // ---------------------------------------------------------------------------
 
-static SD break_dec(const Tok& L, const Tok& R,
-                    const FormatOptions& opts, bool in_dim) {
-    auto lf=L.ftt; const auto& lx=L.text; const auto& ll=L.lo;
-    auto rf=R.ftt; const auto& rx=R.text; const auto& rl=R.lo;
+static SD break_dec(const Tok& L, const Tok& R, const FormatOptions& opts, bool in_dim) {
+    const auto& lx = L.text;
+    const auto& ll = L.lo;
+    const auto& rx = R.text;
+    const auto& rl = R.lo;
 
-    if (in_dim&&lf!=FTT::Colon&&lx!="["&&lx!="]"
-              &&rf!=FTT::Colon&&rx!="["&&rx!="]")
+    if (in_dim && lx != ":" && lx != "[" && lx != "]" && rx != ":" && rx != "[" && rx != "]")
         return SD::Preserve;
-    if (rf==FTT::IncludeDirective||lf==FTT::IncludeDirective) return SD::MustWrap;
-    if (lf==FTT::EolComment) return SD::MustWrap;
-    if (lf==FTT::UnaryOperator) return SD::MustAppend;
-    if (has(INDENT_CLOSE,rl)) return SD::MustWrap;
-    if (rl=="else") {
-        if (ll=="end") return opts.statement.wrap_end_else_clauses ? SD::MustWrap : SD::MustAppend;
-        if (lx=="}") return SD::MustAppend;
+    if (R.directive || L.directive)
+        return SD::MustWrap;
+    if (L.comment && L.text.find('\n') != std::string::npos)
+        return SD::MustWrap;
+    if (L.comment && L.text.rfind("//", 0) == 0)
+        return SD::MustWrap;
+    if (is_unary_op(L))
+        return SD::MustAppend;
+    if (has(INDENT_CLOSE, rl))
+        return SD::MustWrap;
+    if (rl == "else") {
+        if (ll == "end")
+            return opts.statement.wrap_end_else_clauses ? SD::MustWrap : SD::MustAppend;
+        if (lx == "}")
+            return SD::MustAppend;
         return SD::MustWrap;
     }
-    if (ll=="else"&&rl=="begin") return SD::MustAppend;
-    if (lx==")"&&rl=="begin") return SD::MustAppend;
-    if (lf==FTT::Hash) return SD::MustAppend;
+    if (ll == "else" && rl == "begin")
+        return SD::MustAppend;
+    if (lx == ")" && rl == "begin")
+        return SD::MustAppend;
+    if (lx == "#")
+        return SD::MustAppend;
     return SD::Undecided;
 }
 
@@ -495,9 +387,175 @@ static SD break_dec(const Tok& L, const Tok& R,
 // ---------------------------------------------------------------------------
 
 static std::string kw_case(const std::string& t, const std::string& mode) {
-    if (mode=="lower") { auto r=t; for(auto&c:r) c=(char)std::tolower((unsigned char)c); return r; }
-    if (mode=="upper") { auto r=t; for(auto&c:r) c=(char)std::toupper((unsigned char)c); return r; }
+    if (mode == "lower") {
+        auto r = t;
+        for (auto& c : r)
+            c = (char)std::tolower((unsigned char)c);
+        return r;
+    }
+    if (mode == "upper") {
+        auto r = t;
+        for (auto& c : r)
+            c = (char)std::toupper((unsigned char)c);
+        return r;
+    }
     return t;
+}
+
+static void push_tok(std::vector<Tok>& toks, TokenKind kind, std::string text, int pos,
+                     bool whitespace = false, bool comment = false, bool directive = false) {
+    Tok t;
+    t.kind = kind;
+    t.lo = lower(text);
+    t.text = std::move(text);
+    t.pos = pos;
+    t.whitespace = whitespace;
+    t.comment = comment;
+    t.directive = directive;
+    toks.push_back(std::move(t));
+}
+
+static void append_trivia_text(std::vector<Tok>& toks, const std::string& source, size_t start,
+                               size_t end) {
+    size_t i = start;
+    while (i < end) {
+        if (source[i] == '/' && i + 1 < end && source[i + 1] == '/') {
+            size_t j = i + 2;
+            while (j < end && source[j] != '\n')
+                ++j;
+            push_tok(toks, TokenKind::Unknown, source.substr(i, j - i), (int)i, false, true, false);
+            i = j;
+        } else if (source[i] == '/' && i + 1 < end && source[i + 1] == '*') {
+            size_t j = i + 2;
+            while (j + 1 < end && !(source[j] == '*' && source[j + 1] == '/'))
+                ++j;
+            if (j + 1 < end)
+                j += 2;
+            push_tok(toks, TokenKind::Unknown, source.substr(i, j - i), (int)i, false, true, false);
+            i = j;
+        } else if (source[i] == '`') {
+            size_t line_start = i;
+            while (line_start > start && source[line_start - 1] != '\n')
+                --line_start;
+            size_t first = line_start;
+            while (first < i && (source[first] == ' ' || source[first] == '\t'))
+                ++first;
+            size_t name_end = i + 1;
+            while (name_end < end && (std::isalnum((unsigned char)source[name_end]) ||
+                                      source[name_end] == '_' || source[name_end] == '$'))
+                ++name_end;
+            std::string name = source.substr(i, name_end - i);
+            static const std::unordered_set<std::string> DIRECTIVES = {
+                "`include", "`define", "`ifdef", "`ifndef", "`elsif", "`else", "`endif"};
+            if (first == i && has(DIRECTIVES, name)) {
+                size_t j = i;
+                do {
+                    while (j < end && source[j] != '\n')
+                        ++j;
+                    if (j == 0 || source[j - 1] != '\\')
+                        break;
+                    if (j < end)
+                        ++j;
+                } while (j < end);
+                push_tok(toks, TokenKind::Unknown, source.substr(i, j - i), (int)i, false, false,
+                         true);
+                i = j;
+            } else {
+                push_tok(toks, TokenKind::Identifier, std::move(name), (int)i);
+                i = name_end;
+            }
+        } else if (source[i] == '"') {
+            size_t j = i + 1;
+            while (j < end) {
+                if (source[j] == '\\' && j + 1 < end) {
+                    j += 2;
+                } else if (source[j] == '"') {
+                    ++j;
+                    break;
+                } else {
+                    ++j;
+                }
+            }
+            push_tok(toks, TokenKind::StringLiteral, source.substr(i, j - i), (int)i);
+            i = j;
+        } else if (std::isspace((unsigned char)source[i])) {
+            size_t j = i + 1;
+            while (j < end && std::isspace((unsigned char)source[j]))
+                ++j;
+            push_tok(toks, TokenKind::Unknown, source.substr(i, j - i), (int)i, true, false, false);
+            i = j;
+        } else if (std::isalpha((unsigned char)source[i]) || source[i] == '_' || source[i] == '$') {
+            size_t j = i + 1;
+            while (j < end &&
+                   (std::isalnum((unsigned char)source[j]) || source[j] == '_' || source[j] == '$'))
+                ++j;
+            push_tok(toks, TokenKind::Identifier, source.substr(i, j - i), (int)i);
+            i = j;
+        } else if (std::isdigit((unsigned char)source[i])) {
+            size_t j = i + 1;
+            while (j < end && (std::isalnum((unsigned char)source[j]) || source[j] == '_' ||
+                               source[j] == '\''))
+                ++j;
+            push_tok(toks, TokenKind::IntegerLiteral, source.substr(i, j - i), (int)i);
+            i = j;
+        } else if (std::ispunct((unsigned char)source[i])) {
+            static const std::vector<std::string> OPS = {
+                "<<=", ">>=", "===", "!==", "<<<", ">>>", "->", "<->", "&&", "||", "**", "##",
+                "|->", "+=",  "-=",  "*=",  "/=",  "%=",  "&=", "|=",  "^=", "<=", ">=", "==",
+                "!=",  "::",  "~&",  "~|",  "~^",  "^~",  "++", "--",  "<<", ">>"};
+            bool matched = false;
+            for (const auto& op : OPS) {
+                if (i + op.size() <= end && source.compare(i, op.size(), op) == 0) {
+                    push_tok(toks, TokenKind::Unknown, op, (int)i);
+                    i += op.size();
+                    matched = true;
+                    break;
+                }
+            }
+            if (!matched) {
+                push_tok(toks, TokenKind::Unknown, source.substr(i, 1), (int)i);
+                ++i;
+            }
+        } else {
+            push_tok(toks, TokenKind::Unknown, source.substr(i, 1), (int)i);
+            ++i;
+        }
+    }
+}
+
+static std::vector<Tok> collect_cst_tokens(const std::string& source, const SyntaxTree& tree,
+                                           bool source_only) {
+    std::vector<Tok> toks;
+    size_t cursor = 0;
+    const auto& sm = tree.sourceManager();
+    for (auto it = tree.root().tokens_begin(); it != tree.root().tokens_end(); ++it) {
+        auto token = *it;
+        if (!token || token.isMissing() || token.kind == TokenKind::EndOfFile)
+            continue;
+        auto loc = token.location();
+        if (!loc.valid())
+            continue;
+        if (!sm.isFileLoc(loc))
+            continue;
+        if (source_only) {
+            if (sm.getSourceText(loc.buffer()) != source)
+                continue;
+        }
+        size_t off = loc.offset();
+        if (off > source.size())
+            continue;
+        if (off < cursor)
+            continue;
+        if (cursor < off)
+            append_trivia_text(toks, source, cursor, off);
+        std::string raw(token.rawText());
+        if (!raw.empty())
+            push_tok(toks, token.kind, raw, (int)off);
+        cursor = std::max(cursor, off + raw.size());
+    }
+    if (cursor < source.size())
+        append_trivia_text(toks, source, cursor, source.size());
+    return toks;
 }
 
 // ---------------------------------------------------------------------------
@@ -510,11 +568,13 @@ static std::vector<std::string> split_top_level(const std::string& text) {
     size_t start = 0;
     for (size_t i = 0; i < text.size(); ++i) {
         char c = text[i];
-        if (c=='('||c=='['||c=='{') ++depth;
-        else if (c==')'||c==']'||c=='}') --depth;
-        else if (c==',' && depth==0) {
-            parts.push_back(text.substr(start, i-start));
-            start = i+1;
+        if (c == '(' || c == '[' || c == '{')
+            ++depth;
+        else if (c == ')' || c == ']' || c == '}')
+            --depth;
+        else if (c == ',' && depth == 0) {
+            parts.push_back(text.substr(start, i - start));
+            start = i + 1;
         }
     }
     parts.push_back(text.substr(start));
@@ -525,119 +585,171 @@ static std::vector<std::string> split_top_level(const std::string& text) {
 // Port-declaration alignment pass
 // ---------------------------------------------------------------------------
 
-static const std::unordered_set<std::string> PORT_DIRS = {"input","output","inout"};
+static const std::unordered_set<std::string> PORT_DIRS = {"input", "output", "inout"};
 
 struct PortParsed {
     bool valid{false};
     std::string indent, direction, dtype, qualifier, dim;
-    std::vector<std::pair<std::string,std::string>> names; // (name, trailing)
+    std::vector<std::pair<std::string, std::string>> names; // (name, trailing)
     std::string terminator, comment;
 };
 
 static PortParsed parse_port(const std::string& raw) {
     PortParsed r;
     std::string s = raw;
-    while (!s.empty()&&(s.back()==' '||s.back()=='\t')) s.pop_back();
-    size_t p=0; while(p<s.size()&&(s[p]==' '||s[p]=='\t')) ++p;
-    r.indent = s.substr(0,p);
+    while (!s.empty() && (s.back() == ' ' || s.back() == '\t'))
+        s.pop_back();
+    size_t p = 0;
+    while (p < s.size() && (s[p] == ' ' || s[p] == '\t'))
+        ++p;
+    r.indent = s.substr(0, p);
     std::string code = s.substr(p);
 
-    auto cp=code.find("//");
-    if (cp!=std::string::npos) {
-        r.comment = " "+code.substr(cp); code=code.substr(0,cp);
-        while(!code.empty()&&(code.back()==' '||code.back()=='\t')) code.pop_back();
+    auto cp = code.find("//");
+    if (cp != std::string::npos) {
+        r.comment = " " + code.substr(cp);
+        code = code.substr(0, cp);
+        while (!code.empty() && (code.back() == ' ' || code.back() == '\t'))
+            code.pop_back();
     }
-    if (!code.empty()&&(code.back()==','||code.back()==';')) {
-        r.terminator=std::string(1,code.back()); code.pop_back();
-        while(!code.empty()&&(code.back()==' '||code.back()=='\t')) code.pop_back();
+    if (!code.empty() && (code.back() == ',' || code.back() == ';')) {
+        r.terminator = std::string(1, code.back());
+        code.pop_back();
+        while (!code.empty() && (code.back() == ' ' || code.back() == '\t'))
+            code.pop_back();
     }
 
     std::vector<std::string> toks;
-    { std::istringstream ss(code); std::string w; while(ss>>w) toks.push_back(w); }
-    if (toks.empty()) return r;
+    {
+        std::vector<std::string> raw;
+        std::istringstream ss(code);
+        std::string w;
+        while (ss >> w)
+            raw.push_back(w);
+        // Expand compact "ident[...]" tokens (e.g., "packet_t[0:0]" → "packet_t" + "[0:0]")
+        // so parse_port correctly identifies user-defined types with packed dimensions.
+        for (auto& t : raw) {
+            if (!t.empty() && t[0] != '[' && (std::isalpha((unsigned char)t[0]) || t[0] == '_')) {
+                auto bk = t.find('[');
+                if (bk != std::string::npos) {
+                    toks.push_back(t.substr(0, bk));
+                    toks.push_back(t.substr(bk));
+                    continue;
+                }
+            }
+            toks.push_back(t);
+        }
+    }
+    if (toks.empty())
+        return r;
 
     static const std::unordered_set<std::string> BTYPES = {
-        "logic","wire","reg","bit","byte","shortint","int","longint",
-        "integer","real","realtime","shortreal","time","string","chandle","event","var",
+        "logic", "wire",    "reg",     "bit",   "byte",     "shortint",
+        "int",   "longint", "integer", "real",  "realtime", "shortreal",
+        "time",  "string",  "chandle", "event", "var",
     };
     static const std::unordered_set<std::string> NET_TYPES = {
-        "var","wire","uwire","tri","tri0","tri1","wand","triand","wor","trior","trireg",
-        "supply0","supply1",
+        "var",    "wire", "uwire", "tri",    "tri0",    "tri1",    "wand",
+        "triand", "wor",  "trior", "trireg", "supply0", "supply1",
     };
     static const std::unordered_set<std::string> DATA_TYPES = {
-        "logic","reg","bit","byte","shortint","int","longint","integer","time",
+        "logic", "reg", "bit", "byte", "shortint", "int", "longint", "integer", "time",
     };
-    static const std::unordered_set<std::string> QUALS = {"signed","unsigned"};
+    static const std::unordered_set<std::string> QUALS = {"signed", "unsigned"};
 
     std::string d0 = lower(toks[0]);
-    if (!has(PORT_DIRS,d0)) return r;
+    if (!has(PORT_DIRS, d0))
+        return r;
     r.direction = toks[0];
-    size_t idx=1;
+    size_t idx = 1;
 
     // Check if string is a pure identifier (no commas or special chars)
     auto is_pure_id = [](const std::string& s) -> bool {
-        if (s.empty() || (!std::isalpha((unsigned char)s[0]) && s[0] != '_')) return false;
+        if (s.empty() || (!std::isalpha((unsigned char)s[0]) && s[0] != '_'))
+            return false;
         for (size_t k = 1; k < s.size(); ++k) {
             char c = s[k];
-            if (c == ':' && k + 1 < s.size() && s[k+1] == ':') { k += 1; continue; }
-            if (!std::isalnum((unsigned char)c) && c != '_') return false;
+            if (c == ':' && k + 1 < s.size() && s[k + 1] == ':') {
+                k += 1;
+                continue;
+            }
+            if (!std::isalnum((unsigned char)c) && c != '_')
+                return false;
         }
         return true;
     };
 
-    if (idx<toks.size()) {
+    if (idx < toks.size()) {
         const std::string& cand = toks[idx];
-        std::string cl=lower(cand);
+        std::string cl = lower(cand);
         bool pure_id = is_pure_id(cand);
-        if (pure_id && cand[0]!='[' && !has(QUALS,cl)) {
-            bool is_builtin  = has(BTYPES,cl);
-            bool is_usertype = pure_id && idx+1<toks.size();
-            if (is_builtin||is_usertype) {
-                r.dtype=toks[idx++];
-                if (has(NET_TYPES,cl) && idx<toks.size()) {
-                    std::string ncl=lower(toks[idx]);
-                    if (has(DATA_TYPES,ncl)) {
+        if (pure_id && cand[0] != '[' && !has(QUALS, cl)) {
+            bool is_builtin = has(BTYPES, cl);
+            bool is_usertype = pure_id && idx + 1 < toks.size();
+            if (is_builtin || is_usertype) {
+                r.dtype = toks[idx++];
+                if (has(NET_TYPES, cl) && idx < toks.size()) {
+                    std::string ncl = lower(toks[idx]);
+                    if (has(DATA_TYPES, ncl)) {
                         r.dtype += " " + toks[idx++];
                     }
                 }
             }
         }
     }
-    if (idx<toks.size()&&has(QUALS,lower(toks[idx]))) r.qualifier=toks[idx++];
-    if (idx<toks.size()&&!toks[idx].empty()&&toks[idx][0]=='[') {
-        int depth=0;
-        while(idx<toks.size()) {
-            auto& t=toks[idx]; r.dim+=t;
-            for(char ch:t){ if(ch=='[')++depth; else if(ch==']')--depth; }
-            ++idx; if(depth<=0) break;
+    if (idx < toks.size() && has(QUALS, lower(toks[idx])))
+        r.qualifier = toks[idx++];
+    if (idx < toks.size() && !toks[idx].empty() && toks[idx][0] == '[') {
+        int depth = 0;
+        while (idx < toks.size()) {
+            auto& t = toks[idx];
+            r.dim += t;
+            for (char ch : t) {
+                if (ch == '[')
+                    ++depth;
+                else if (ch == ']')
+                    --depth;
+            }
+            ++idx;
+            if (depth <= 0)
+                break;
         }
     }
-    if (idx>=toks.size()) return r;
+    if (idx >= toks.size())
+        return r;
 
     // Remaining tokens are comma-separated names (possibly with unpacked dims/defaults)
     // Rebuild remaining as string and split by top-level comma
     std::string remaining;
-    for (size_t k=idx; k<toks.size(); ++k) {
-        if (k>idx) remaining+=' ';
-        remaining+=toks[k];
+    for (size_t k = idx; k < toks.size(); ++k) {
+        if (k > idx)
+            remaining += ' ';
+        remaining += toks[k];
     }
     auto raw_names = split_top_level(remaining);
-    if (raw_names.empty()) return r;
+    if (raw_names.empty())
+        return r;
 
     // Split "name trailing..." into (name, trailing)
-    auto split_id_trail = [](const std::string& nm) -> std::pair<std::string,std::string> {
+    auto split_id_trail = [](const std::string& nm) -> std::pair<std::string, std::string> {
         size_t i = 0;
-        while (i < nm.size() && (std::isalnum((unsigned char)nm[i]) || nm[i] == '_')) ++i;
+        while (i < nm.size() && (std::isalnum((unsigned char)nm[i]) || nm[i] == '_'))
+            ++i;
         std::string name = nm.substr(0, i);
-        while (i < nm.size() && (nm[i] == ' ' || nm[i] == '\t')) ++i;
+        while (i < nm.size() && (nm[i] == ' ' || nm[i] == '\t'))
+            ++i;
         return {name, nm.substr(i)};
     };
 
     for (auto& rn : raw_names) {
         // trim
-        size_t a=0; while(a<rn.size()&&(rn[a]==' '||rn[a]=='\t')) ++a;
-        size_t b=rn.size(); while(b>a&&(rn[b-1]==' '||rn[b-1]=='\t')) --b;
-        std::string nm = rn.substr(a,b-a);
+        size_t a = 0;
+        while (a < rn.size() && (rn[a] == ' ' || rn[a] == '\t'))
+            ++a;
+        size_t b = rn.size();
+        while (b > a && (rn[b - 1] == ' ' || rn[b - 1] == '\t'))
+            --b;
+        std::string nm = rn.substr(a, b - a);
         auto [name, trail] = split_id_trail(nm);
         if (!name.empty()) {
             r.names.push_back({name, trail});
@@ -650,18 +762,27 @@ static PortParsed parse_port(const std::string& raw) {
 }
 
 static std::string align_port_pass(const std::string& text, const FormatOptions& opts,
-                                    const std::unordered_map<int,LineKind>* kinds) {
+                                   const std::unordered_map<int, LineKind>* kinds) {
     std::vector<std::string> lines;
-    { std::istringstream ss(text); std::string l; while(std::getline(ss,l)) lines.push_back(l); }
+    {
+        std::istringstream ss(text);
+        std::string l;
+        while (std::getline(ss, l))
+            lines.push_back(l);
+    }
 
     std::vector<std::string> out;
-    size_t i=0;
+    size_t i = 0;
+    bool disabled_region = false;
+    bool module_header_region = false;
     auto starts_with_port_dir = [](const std::string& line) -> bool {
         size_t p = 0;
-        while (p < line.size() && (line[p]==' ' || line[p]=='\t')) ++p;
+        while (p < line.size() && (line[p] == ' ' || line[p] == '\t'))
+            ++p;
         size_t q = p;
-        while (q < line.size() && std::isalpha((unsigned char)line[q])) ++q;
-        return has(PORT_DIRS, lower(line.substr(p, q-p)));
+        while (q < line.size() && std::isalpha((unsigned char)line[q]))
+            ++q;
+        return has(PORT_DIRS, lower(line.substr(p, q - p)));
     };
     auto is_port_decl_line = [&](int idx) -> bool {
         if (idx < 0 || idx >= (int)lines.size())
@@ -675,17 +796,58 @@ static std::string align_port_pass(const std::string& text, const FormatOptions&
             return false;
         const std::string& line = lines[idx];
         size_t p = 0;
-        while (p < line.size() && (line[p]==' ' || line[p]=='\t')) ++p;
+        while (p < line.size() && (line[p] == ' ' || line[p] == '\t'))
+            ++p;
         return p < line.size() && line[p] == ';' &&
                line.find_first_not_of(" \t", p + 1) == std::string::npos;
     };
-    while(i<lines.size()) {
-        if (!is_port_decl_line((int)i)) { out.push_back(lines[i]); ++i; continue; }
+    while (i < lines.size()) {
+        std::string trimmed_line = lines[i];
+        size_t ta = trimmed_line.find_first_not_of(" \t");
+        size_t tb = trimmed_line.find_last_not_of(" \t");
+        trimmed_line =
+            (ta == std::string::npos) ? std::string() : trimmed_line.substr(ta, tb - ta + 1);
+        if (module_header_region) {
+            out.push_back(lines[i]);
+            if (trimmed_line.find(");") != std::string::npos)
+                module_header_region = false;
+            ++i;
+            continue;
+        }
+        if ((trimmed_line.rfind("module ", 0) == 0 || trimmed_line.rfind("macromodule ", 0) == 0) &&
+            trimmed_line.find('(') != std::string::npos &&
+            trimmed_line.find(';') == std::string::npos) {
+            module_header_region = true;
+            out.push_back(lines[i]);
+            ++i;
+            continue;
+        }
+        if (trimmed_line.find("verilog_format") != std::string::npos &&
+            trimmed_line.find("off") != std::string::npos) {
+            disabled_region = true;
+            out.push_back(lines[i]);
+            ++i;
+            continue;
+        }
+        if (disabled_region) {
+            out.push_back(lines[i]);
+            if (trimmed_line.find("verilog_format") != std::string::npos &&
+                trimmed_line.find("on") != std::string::npos)
+                disabled_region = false;
+            ++i;
+            continue;
+        }
+        if (!is_port_decl_line((int)i)) {
+            out.push_back(lines[i]);
+            ++i;
+            continue;
+        }
 
-        std::vector<std::pair<std::string,PortParsed>> blk;
-        size_t j=i;
-        while(j<lines.size()) {
-            if (!is_port_decl_line((int)j)) break;
+        std::vector<std::pair<std::string, PortParsed>> blk;
+        size_t j = i;
+        while (j < lines.size()) {
+            if (!is_port_decl_line((int)j))
+                break;
             std::string port_line = lines[j++];
             if (is_semi_only((int)j)) {
                 port_line += ";";
@@ -694,42 +856,59 @@ static std::string align_port_pass(const std::string& text, const FormatOptions&
             blk.push_back({port_line, parse_port(port_line)});
         }
 
-        int md=0, ms2_content=0, mdim=0; int np=0;
-        size_t max_slots=0;
-        for(auto&[orig,pp]:blk) {
-            if(!pp.valid) continue; ++np;
-            md=std::max(md,(int)pp.direction.size());
-            std::string s2=pp.dtype+(pp.qualifier.empty()?"":" "+pp.qualifier);
-            ms2_content=std::max(ms2_content,(int)s2.size());
-            mdim=std::max(mdim,(int)pp.dim.size());
-            max_slots=std::max(max_slots,pp.names.size());
+        int md = 0, ms2_content = 0, mdim = 0;
+        int np = 0;
+        size_t max_slots = 0;
+        for (auto& [orig, pp] : blk) {
+            if (!pp.valid)
+                continue;
+            ++np;
+            md = std::max(md, (int)pp.direction.size());
+            std::string s2 = pp.dtype + (pp.qualifier.empty() ? "" : " " + pp.qualifier);
+            ms2_content = std::max(ms2_content, (int)s2.size());
+            mdim = std::max(mdim, (int)pp.dim.size());
+            max_slots = std::max(max_slots, pp.names.size());
         }
-        if(!np) { for(auto&[o,_]:blk) out.push_back(o); i=j; continue; }
+        if (!np) {
+            for (auto& [o, _] : blk)
+                out.push_back(o);
+            i = j;
+            continue;
+        }
 
-        int s1=std::max(opts.port_declaration.section1_min_width, md+1);
-        int s2=ms2_content>0?std::max(opts.port_declaration.section2_min_width, ms2_content+1):0;
-        int s3=mdim>0?std::max(opts.port_declaration.section3_min_width, mdim+1):0;
+        int s1 = std::max(opts.port_declaration.section1_min_width, md + 1);
+        int s2 = ms2_content > 0
+                     ? std::max(opts.port_declaration.section2_min_width, ms2_content + 1)
+                     : 0;
+        int s3 = mdim > 0 ? std::max(opts.port_declaration.section3_min_width, mdim + 1) : 0;
         int s5_min = opts.port_declaration.section5_min_width;
 
         // Per-slot id and trailing widths
-        std::vector<int> id_widths(max_slots,0), trail_widths(max_slots,0);
-        for(size_t slot=0;slot<max_slots;++slot) {
-            int max_id=0, max_tr=0;
-            for(auto&[orig,pp]:blk) {
-                if(!pp.valid) continue;
-                if(slot<pp.names.size()){
-                    max_id=std::max(max_id,(int)pp.names[slot].first.size());
-                    max_tr=std::max(max_tr,(int)pp.names[slot].second.size());
+        std::vector<int> id_widths(max_slots, 0), trail_widths(max_slots, 0);
+        for (size_t slot = 0; slot < max_slots; ++slot) {
+            int max_id = 0, max_tr = 0;
+            for (auto& [orig, pp] : blk) {
+                if (!pp.valid)
+                    continue;
+                if (slot < pp.names.size()) {
+                    max_id = std::max(max_id, (int)pp.names[slot].first.size());
+                    max_tr = std::max(max_tr, (int)pp.names[slot].second.size());
                 }
             }
-            id_widths[slot] = std::max(opts.port_declaration.section4_min_width, max_id+1);
+            id_widths[slot] = std::max(opts.port_declaration.section4_min_width, max_id + 1);
             trail_widths[slot] = std::max(s5_min, max_tr);
         }
 
-        auto pad=[](std::string s,int w)->std::string{ s.resize(std::max((int)s.size(),w),' '); return s; };
+        auto pad = [](std::string s, int w) -> std::string {
+            s.resize(std::max((int)s.size(), w), ' ');
+            return s;
+        };
 
-        for(auto&[orig,pp]:blk) {
-            if(!pp.valid) { out.push_back(orig); continue; }
+        for (auto& [orig, pp] : blk) {
+            if (!pp.valid) {
+                out.push_back(orig);
+                continue;
+            }
             int line_s1 = s1;
             int line_s2 = s2;
             int line_s3 = s3;
@@ -737,7 +916,7 @@ static std::string align_port_pass(const std::string& text, const FormatOptions&
             std::vector<int> line_trail_widths = trail_widths;
             if (opts.port_declaration.align_adaptive) {
                 const auto& pd = opts.port_declaration;
-                std::string tp=pp.dtype+(pp.qualifier.empty()?"":" "+pp.qualifier);
+                std::string tp = pp.dtype + (pp.qualifier.empty() ? "" : " " + pp.qualifier);
                 // Cumulative minimum target end columns (fixed reference points).
                 // Each section pads to max(target_end, actual_end).
                 // Overflow on one line is absorbed by subsequent sections' slack,
@@ -746,18 +925,18 @@ static std::string align_port_pass(const std::string& text, const FormatOptions&
                 int t2 = t1 + (s2 > 0 ? pd.section2_min_width : 0);
                 int t3 = t2 + (s3 > 0 ? pd.section3_min_width : 0);
 
-                int e1 = std::max(t1, (int)pp.direction.size()+1);
+                int e1 = std::max(t1, (int)pp.direction.size() + 1);
                 line_s1 = e1;
 
                 int e2 = e1;
                 if (s2 > 0) {
-                    int c2 = tp.empty() ? 0 : (int)tp.size()+1;
+                    int c2 = tp.empty() ? 0 : (int)tp.size() + 1;
                     e2 = std::max(t2, e1 + c2);
                     line_s2 = e2 - e1;
                 }
 
                 if (s3 > 0) {
-                    int c3 = pp.dim.empty() ? 0 : (int)pp.dim.size()+1;
+                    int c3 = pp.dim.empty() ? 0 : (int)pp.dim.size() + 1;
                     int e3 = std::max(t3, e2 + c3);
                     line_s3 = e3 - e2;
                 }
@@ -765,46 +944,48 @@ static std::string align_port_pass(const std::string& text, const FormatOptions&
                 line_id_widths.clear();
                 line_trail_widths.clear();
                 for (const auto& [nm, tr] : pp.names) {
-                    line_id_widths.push_back(std::max(pd.section4_min_width,
-                                                      (int)nm.size()+1));
+                    line_id_widths.push_back(std::max(pd.section4_min_width, (int)nm.size() + 1));
                     line_trail_widths.push_back(std::max(s5_min, (int)tr.size()));
                 }
             }
-            std::string line=pp.indent;
-            line+=pad(pp.direction,line_s1);
-            if(line_s2>0) {
-                std::string tp=pp.dtype+(pp.qualifier.empty()?"":" "+pp.qualifier);
-                line+=pad(tp,line_s2);
+            std::string line = pp.indent;
+            line += pad(pp.direction, line_s1);
+            if (line_s2 > 0) {
+                std::string tp = pp.dtype + (pp.qualifier.empty() ? "" : " " + pp.qualifier);
+                line += pad(tp, line_s2);
             }
-            if(line_s3>0) line+=pad(pp.dim,line_s3);
+            if (line_s3 > 0)
+                line += pad(pp.dim, line_s3);
 
             // Emit per-slot names — mirrors Python _reassemble_port_line
             size_t nslots = pp.names.size();
-            for(size_t slot=0;slot<nslots;++slot) {
-                bool is_last = (slot==nslots-1);
+            for (size_t slot = 0; slot < nslots; ++slot) {
+                bool is_last = (slot == nslots - 1);
                 const auto& nm = pp.names[slot].first;
                 const auto& tr = pp.names[slot].second;
                 // Pad name to slot id width
-                if(slot<line_id_widths.size())
+                if (slot < line_id_widths.size())
                     line += pad(nm, line_id_widths[slot]);
                 else
                     line += nm;
 
-                if(!is_last) {
+                if (!is_last) {
                     // Non-last slot: pad trailing then ", "
-                    if(!tr.empty() && s5_min>0 && slot<line_trail_widths.size() && line_trail_widths[slot]>1)
+                    if (!tr.empty() && s5_min > 0 && slot < line_trail_widths.size() &&
+                        line_trail_widths[slot] > 1)
                         line += pad(tr, line_trail_widths[slot]) + ", ";
-                    else if(slot<line_trail_widths.size())
+                    else if (slot < line_trail_widths.size())
                         line += pad(tr, line_trail_widths[slot]) + ", ";
                     else
                         line += tr + ", ";
                 } else {
                     // Last slot — matches Python _reassemble_port_line last-slot logic
                     std::string term = pp.terminator.empty() ? ";" : pp.terminator;
-                    if(!tr.empty() && s5_min>0 && slot<line_trail_widths.size() && line_trail_widths[slot]>1) {
+                    if (!tr.empty() && s5_min > 0 && slot < line_trail_widths.size() &&
+                        line_trail_widths[slot] > 1) {
                         line += pad(tr, line_trail_widths[slot]) + term;
                     } else {
-                        if(slot<line_trail_widths.size())
+                        if (slot < line_trail_widths.size())
                             line += pad(tr, line_trail_widths[slot]);
                         else
                             line += tr;
@@ -813,13 +994,21 @@ static std::string align_port_pass(const std::string& text, const FormatOptions&
                     }
                 }
             }
-            if(!pp.comment.empty()) line+=pp.comment;
-            while(!line.empty()&&line.back()==' ') line.pop_back();
+            if (!pp.comment.empty())
+                line += pp.comment;
+            while (!line.empty() && line.back() == ' ')
+                line.pop_back();
             out.push_back(line);
         }
-        i=j;
+        i = j;
     }
-    std::string r; for(size_t k=0;k<out.size();++k){if(k)r+='\n'; r+=out[k];} return r;
+    std::string r;
+    for (size_t k = 0; k < out.size(); ++k) {
+        if (k)
+            r += '\n';
+        r += out[k];
+    }
+    return r;
 }
 
 // ---------------------------------------------------------------------------
@@ -827,22 +1016,25 @@ static std::string align_port_pass(const std::string& text, const FormatOptions&
 // ---------------------------------------------------------------------------
 
 static std::string align_assign_pass(const std::string& text, const FormatOptions& opts,
-                                      const std::unordered_map<int,LineKind>* kinds) {
+                                     const std::unordered_map<int, LineKind>* kinds) {
     static const std::regex BLK(R"( ((?:[+\-*/%&|^]|<<|>>|<<<|>>>)?=)(?!=) )");
     static const std::regex NBLK(R"( <= )");
 
-    auto find_op=[&](const std::string& line)->std::pair<int,std::string>{
-        size_t cp=line.find("//");
-        std::string code=(cp!=std::string::npos)?line.substr(0,cp):line;
-        std::smatch m1,m2;
-        bool h1=std::regex_search(code,m1,BLK);
-        bool h2=std::regex_search(code,m2,NBLK);
-        if(h1&&h2) return (m2.position()<m1.position())?
-            std::make_pair((int)m2.position(),std::string("<=")):
-            std::make_pair((int)m1.position(),m1[1].str());
-        if(h2) return {(int)m2.position(),"<="};
-        if(h1) return {(int)m1.position(),m1[1].str()};
-        return {-1,""};
+    auto find_op = [&](const std::string& line) -> std::pair<int, std::string> {
+        size_t cp = line.find("//");
+        std::string code = (cp != std::string::npos) ? line.substr(0, cp) : line;
+        std::smatch m1, m2;
+        bool h1 = std::regex_search(code, m1, BLK);
+        bool h2 = std::regex_search(code, m2, NBLK);
+        if (h1 && h2)
+            return (m2.position() < m1.position())
+                       ? std::make_pair((int)m2.position(), std::string("<="))
+                       : std::make_pair((int)m1.position(), m1[1].str());
+        if (h2)
+            return {(int)m2.position(), "<="};
+        if (h1)
+            return {(int)m1.position(), m1[1].str()};
+        return {-1, ""};
     };
 
     auto is_var = [&](int line_idx) -> bool {
@@ -850,45 +1042,77 @@ static std::string align_assign_pass(const std::string& text, const FormatOption
     };
 
     std::vector<std::string> lines;
-    { std::istringstream ss(text); std::string l; while(std::getline(ss,l)) lines.push_back(l); }
+    {
+        std::istringstream ss(text);
+        std::string l;
+        while (std::getline(ss, l))
+            lines.push_back(l);
+    }
 
     std::vector<std::string> out;
-    size_t i=0;
-    while(i<lines.size()) {
-        auto [p0,op0]=find_op(lines[i]);
-        if(p0<0||is_var((int)i)) { out.push_back(lines[i]); ++i; continue; }
-        size_t ind=0;
-        while(ind<lines[i].size()&&(lines[i][ind]==' '||lines[i][ind]=='\t')) ++ind;
+    size_t i = 0;
+    while (i < lines.size()) {
+        auto [p0, op0] = find_op(lines[i]);
+        if (p0 < 0 || is_var((int)i)) {
+            out.push_back(lines[i]);
+            ++i;
+            continue;
+        }
+        size_t ind = 0;
+        while (ind < lines[i].size() && (lines[i][ind] == ' ' || lines[i][ind] == '\t'))
+            ++ind;
 
-        struct E { std::string line; int pos; std::string op; int lw; };
+        struct E {
+            std::string line;
+            int pos;
+            std::string op;
+            int lw;
+        };
         std::vector<E> grp;
-        size_t j=i;
-        while(j<lines.size()) {
-            const auto& lj=lines[j];
-            if(lj.empty()) break;
-            if(is_var((int)j)) break;
-            size_t ij=0; while(ij<lj.size()&&(lj[ij]==' '||lj[ij]=='\t')) ++ij;
-            if(ij!=ind) break;
-            auto[pj,oj]=find_op(lj);
-            if(pj<0) break;
-            grp.push_back({lj,pj,oj,(int)(pj-(int)ij)});
+        size_t j = i;
+        while (j < lines.size()) {
+            const auto& lj = lines[j];
+            if (lj.empty())
+                break;
+            if (is_var((int)j))
+                break;
+            size_t ij = 0;
+            while (ij < lj.size() && (lj[ij] == ' ' || lj[ij] == '\t'))
+                ++ij;
+            if (ij != ind)
+                break;
+            auto [pj, oj] = find_op(lj);
+            if (pj < 0)
+                break;
+            grp.push_back({lj, pj, oj, (int)(pj - (int)ij)});
             ++j;
         }
-        if(grp.empty()){out.push_back(lines[i]);++i;continue;}
-
-        int mx=opts.statement.lhs_min_width;
-        for(auto&e:grp) mx=std::max(mx,e.lw);
-        int col=mx+1;
-        for(auto&e:grp) {
-            int sp=std::max(1,col-e.lw);
-            std::string lhs=e.line.substr(0,e.pos);
-            size_t rs=(size_t)(e.pos+1+(int)e.op.size()+1);
-            std::string rhs=(rs<e.line.size())?e.line.substr(rs):"";
-            out.push_back(lhs+std::string(sp,' ')+e.op+" "+rhs);
+        if (grp.empty()) {
+            out.push_back(lines[i]);
+            ++i;
+            continue;
         }
-        i=j;
+
+        int mx = opts.statement.lhs_min_width;
+        for (auto& e : grp)
+            mx = std::max(mx, e.lw);
+        int col = mx + 1;
+        for (auto& e : grp) {
+            int sp = std::max(1, col - e.lw);
+            std::string lhs = e.line.substr(0, e.pos);
+            size_t rs = (size_t)(e.pos + 1 + (int)e.op.size() + 1);
+            std::string rhs = (rs < e.line.size()) ? e.line.substr(rs) : "";
+            out.push_back(lhs + std::string(sp, ' ') + e.op + " " + rhs);
+        }
+        i = j;
     }
-    std::string r; for(size_t k=0;k<out.size();++k){if(k)r+='\n'; r+=out[k];} return r;
+    std::string r;
+    for (size_t k = 0; k < out.size(); ++k) {
+        if (k)
+            r += '\n';
+        r += out[k];
+    }
+    return r;
 }
 
 // ---------------------------------------------------------------------------
@@ -896,53 +1120,70 @@ static std::string align_assign_pass(const std::string& text, const FormatOption
 // ---------------------------------------------------------------------------
 
 static const std::unordered_set<std::string> VAR_BUILTIN_TYPES = {
-    "wire","logic","reg","bit","byte","int","integer","time",
-    "shortint","longint","signed","unsigned",
+    "wire",    "logic", "reg",      "bit",     "byte",   "int",
+    "integer", "time",  "shortint", "longint", "signed", "unsigned",
 };
 static const std::unordered_set<std::string> VAR_PREFIX_KW = {
-    "static","automatic","const","var",
+    "static",
+    "automatic",
+    "const",
+    "var",
 };
 static const std::unordered_set<std::string> VAR_EXCLUDED = {
-    "input","output","inout","ref",
+    "input",
+    "output",
+    "inout",
+    "ref",
 };
 
 struct VarParsed {
     std::string indent, type_kw, qualifier, dim;
-    std::vector<std::pair<std::string,std::string>> declarators; // (name, trailing)
+    std::vector<std::pair<std::string, std::string>> declarators; // (name, trailing)
     std::string comment;
 };
 
 static VarParsed* parse_var_line(const std::string& line) {
     std::string stripped = line;
-    while(!stripped.empty()&&(stripped.back()==' '||stripped.back()=='\t')) stripped.pop_back();
-    size_t ip=0; while(ip<stripped.size()&&(stripped[ip]==' '||stripped[ip]=='\t')) ++ip;
-    std::string indent = stripped.substr(0,ip);
+    while (!stripped.empty() && (stripped.back() == ' ' || stripped.back() == '\t'))
+        stripped.pop_back();
+    size_t ip = 0;
+    while (ip < stripped.size() && (stripped[ip] == ' ' || stripped[ip] == '\t'))
+        ++ip;
+    std::string indent = stripped.substr(0, ip);
     std::string code = stripped.substr(ip);
 
     // Strip trailing // comment
     std::string comment;
     auto cm = code.rfind("//");
-    if(cm!=std::string::npos) {
+    if (cm != std::string::npos) {
         // Make sure // is not inside a string
         comment = " " + code.substr(cm);
-        code = code.substr(0,cm);
-        while(!code.empty()&&(code.back()==' '||code.back()=='\t')) code.pop_back();
+        code = code.substr(0, cm);
+        while (!code.empty() && (code.back() == ' ' || code.back() == '\t'))
+            code.pop_back();
     }
 
     // Must end with ;
-    if(code.empty()||code.back()!=';') return nullptr;
+    if (code.empty() || code.back() != ';')
+        return nullptr;
     code.pop_back();
-    while(!code.empty()&&(code.back()==' '||code.back()=='\t')) code.pop_back();
+    while (!code.empty() && (code.back() == ' ' || code.back() == '\t'))
+        code.pop_back();
 
     // Split into tokens, expanding compact "identifier[...]" tokens
     std::vector<std::string> raw_toks;
-    { std::istringstream ss(code); std::string w; while(ss>>w) raw_toks.push_back(w); }
-    if(raw_toks.empty()) return nullptr;
+    {
+        std::istringstream ss(code);
+        std::string w;
+        while (ss >> w)
+            raw_toks.push_back(w);
+    }
+    if (raw_toks.empty())
+        return nullptr;
     // Expand compact "ident[...]" -> "ident" + "[...]"
     std::vector<std::string> toks;
-    for(auto& t : raw_toks) {
-        if (!t.empty() && t[0] != '[' &&
-            (std::isalpha((unsigned char)t[0]) || t[0] == '_')) {
+    for (auto& t : raw_toks) {
+        if (!t.empty() && t[0] != '[' && (std::isalpha((unsigned char)t[0]) || t[0] == '_')) {
             auto bk = t.find('[');
             if (bk != std::string::npos) {
                 toks.push_back(t.substr(0, bk));
@@ -954,247 +1195,333 @@ static VarParsed* parse_var_line(const std::string& line) {
     }
 
     std::string first = lower(toks[0]);
-    if(has(VAR_EXCLUDED, first)) return nullptr;
+    if (has(VAR_EXCLUDED, first))
+        return nullptr;
 
-    size_t idx=0;
+    size_t idx = 0;
     std::vector<std::string> type_parts;
-    while(idx<toks.size()&&has(VAR_PREFIX_KW, lower(toks[idx]))) {
+    while (idx < toks.size() && has(VAR_PREFIX_KW, lower(toks[idx]))) {
         type_parts.push_back(toks[idx++]);
     }
-    if(idx>=toks.size()) return nullptr;
+    if (idx >= toks.size())
+        return nullptr;
 
     first = lower(toks[idx]);
-    if(has(VAR_BUILTIN_TYPES, first)) {
+    if (has(VAR_BUILTIN_TYPES, first)) {
         type_parts.push_back(toks[idx++]);
     } else {
         // User-defined type: must be an identifier not an SV keyword
-        if(!std::isalpha((unsigned char)toks[idx][0])&&toks[idx][0]!='_') return nullptr;
-        if(has(SV_KW, first)) return nullptr;
-        if(idx+1>=toks.size()) return nullptr;
+        if (!std::isalpha((unsigned char)toks[idx][0]) && toks[idx][0] != '_')
+            return nullptr;
+        if (has(SV_KW, first))
+            return nullptr;
+        if (idx + 1 >= toks.size())
+            return nullptr;
         // Next must look like dimension, qualifier, or identifier
-        const std::string& nxt = toks[idx+1];
+        const std::string& nxt = toks[idx + 1];
         std::string nxtl = lower(nxt);
-        static const std::unordered_set<std::string> QUALS2 = {"signed","unsigned"};
-        bool ok = nxt[0]=='[' || std::isalpha((unsigned char)nxt[0]) || nxt[0]=='_'
-                  || has(QUALS2,nxtl);
-        if(!ok) return nullptr;
+        static const std::unordered_set<std::string> QUALS2 = {"signed", "unsigned"};
+        bool ok = nxt[0] == '[' || std::isalpha((unsigned char)nxt[0]) || nxt[0] == '_' ||
+                  has(QUALS2, nxtl);
+        if (!ok)
+            return nullptr;
         type_parts.push_back(toks[idx++]);
     }
 
     std::string type_kw;
-    for(size_t k=0;k<type_parts.size();++k){ if(k) type_kw+=' '; type_kw+=type_parts[k]; }
+    for (size_t k = 0; k < type_parts.size(); ++k) {
+        if (k)
+            type_kw += ' ';
+        type_kw += type_parts[k];
+    }
 
     // Optional qualifier
     std::string qualifier;
-    static const std::unordered_set<std::string> QUALS = {"signed","unsigned"};
-    if(idx<toks.size()&&has(QUALS,lower(toks[idx]))) qualifier=toks[idx++];
+    static const std::unordered_set<std::string> QUALS = {"signed", "unsigned"};
+    if (idx < toks.size() && has(QUALS, lower(toks[idx])))
+        qualifier = toks[idx++];
 
     // Optional packed dim
     std::string dim;
-    if(idx<toks.size()&&!toks[idx].empty()&&toks[idx][0]=='[') {
-        int depth=0;
-        while(idx<toks.size()) {
-            dim+=toks[idx];
-            for(char c:toks[idx]){ if(c=='[')++depth; else if(c==']')--depth; }
-            ++idx; if(depth<=0) break;
+    if (idx < toks.size() && !toks[idx].empty() && toks[idx][0] == '[') {
+        int depth = 0;
+        while (idx < toks.size()) {
+            dim += toks[idx];
+            for (char c : toks[idx]) {
+                if (c == '[')
+                    ++depth;
+                else if (c == ']')
+                    --depth;
+            }
+            ++idx;
+            if (depth <= 0)
+                break;
         }
     }
-    if(idx>=toks.size()) return nullptr;
+    if (idx >= toks.size())
+        return nullptr;
 
     // Remaining: comma-separated declarators
     std::string remaining;
-    for(size_t k=idx;k<toks.size();++k){ if(k>idx) remaining+=' '; remaining+=toks[k]; }
+    for (size_t k = idx; k < toks.size(); ++k) {
+        if (k > idx)
+            remaining += ' ';
+        remaining += toks[k];
+    }
 
     auto raw_names = split_top_level(remaining);
-    if(raw_names.empty()) return nullptr;
+    if (raw_names.empty())
+        return nullptr;
 
     // Validate: each name must start with [A-Za-z_]
-    for(auto& rn:raw_names){
-        size_t a=0; while(a<rn.size()&&(rn[a]==' '||rn[a]=='\t')) ++a;
-        if(a>=rn.size()) continue;
+    for (auto& rn : raw_names) {
+        size_t a = 0;
+        while (a < rn.size() && (rn[a] == ' ' || rn[a] == '\t'))
+            ++a;
+        if (a >= rn.size())
+            continue;
         char fc = rn[a];
-        if(!std::isalpha((unsigned char)fc) && fc != '_') return nullptr;
+        if (!std::isalpha((unsigned char)fc) && fc != '_')
+            return nullptr;
     }
 
     auto* vp = new VarParsed{indent, type_kw, qualifier, dim, {}, comment};
-    for(auto& rn:raw_names){
-        size_t a=0; while(a<rn.size()&&(rn[a]==' '||rn[a]=='\t')) ++a;
-        size_t b=rn.size(); while(b>a&&(rn[b-1]==' '||rn[b-1]=='\t')) --b;
-        std::string nm=rn.substr(a,b-a);
+    for (auto& rn : raw_names) {
+        size_t a = 0;
+        while (a < rn.size() && (rn[a] == ' ' || rn[a] == '\t'))
+            ++a;
+        size_t b = rn.size();
+        while (b > a && (rn[b - 1] == ' ' || rn[b - 1] == '\t'))
+            --b;
+        std::string nm = rn.substr(a, b - a);
         size_t ni = 0;
-        while(ni < nm.size() && (std::isalnum((unsigned char)nm[ni]) || nm[ni]=='_')) ++ni;
+        while (ni < nm.size() && (std::isalnum((unsigned char)nm[ni]) || nm[ni] == '_'))
+            ++ni;
         std::string dname = nm.substr(0, ni);
-        while(ni < nm.size() && (nm[ni]==' '||nm[ni]=='\t')) ++ni;
+        while (ni < nm.size() && (nm[ni] == ' ' || nm[ni] == '\t'))
+            ++ni;
         vp->declarators.push_back({dname, nm.substr(ni)});
     }
-    if(vp->declarators.empty()){ delete vp; return nullptr; }
+    if (vp->declarators.empty()) {
+        delete vp;
+        return nullptr;
+    }
     // Reject if any declarator looks like a function/instance call (has '(' in name or trailing)
-    for(auto& decl:vp->declarators){
-        if(decl.first.find('(')!=std::string::npos ||
-           decl.second.find('(')!=std::string::npos) {
-            delete vp; return nullptr;
+    for (auto& decl : vp->declarators) {
+        if (decl.first.find('(') != std::string::npos ||
+            decl.second.find('(') != std::string::npos) {
+            delete vp;
+            return nullptr;
         }
     }
     return vp;
 }
 
 static std::string align_var_pass(const std::string& text, const FormatOptions& opts,
-                                   const std::unordered_map<int,LineKind>* kinds) {
+                                  const std::unordered_map<int, LineKind>* kinds) {
     const auto& vo = opts.var_declaration;
 
     std::vector<std::string> lines;
-    { std::istringstream ss(text); std::string l; while(std::getline(ss,l)) lines.push_back(l); }
+    {
+        std::istringstream ss(text);
+        std::string l;
+        while (std::getline(ss, l))
+            lines.push_back(l);
+    }
 
     auto is_var_idx = [&](int idx) -> bool {
         return kinds && kinds->count(idx) && kinds->at(idx) == LineKind::VarDecl;
     };
 
     std::vector<std::string> out;
-    size_t i=0;
-    while(i<lines.size()) {
+    size_t i = 0;
+    while (i < lines.size()) {
         const std::string& line = lines[i];
 
         // Enter a block only if slang classified this line as VarDecl
-        if(!is_var_idx((int)i)) { out.push_back(line); ++i; continue; }
+        if (!is_var_idx((int)i)) {
+            out.push_back(line);
+            ++i;
+            continue;
+        }
 
         // Collect block
-        struct BlkEntry { std::string orig; VarParsed* parsed; };
+        struct BlkEntry {
+            std::string orig;
+            VarParsed* parsed;
+        };
         std::vector<BlkEntry> block;
-        size_t j=i;
-        while(j<lines.size()) {
+        size_t j = i;
+        while (j < lines.size()) {
             const std::string& cur = lines[j];
-            if(is_var_idx((int)j)) {
+            if (is_var_idx((int)j)) {
                 block.push_back({cur, parse_var_line(cur)});
-                ++j; continue;
+                ++j;
+                continue;
             }
             // Comment/blank lines pass through without breaking block
-            size_t sp=0; while(sp<cur.size()&&(cur[sp]==' '||cur[sp]=='\t')) ++sp;
-            std::string trimmed=cur.substr(sp);
-            if(trimmed.empty()||trimmed.substr(0,2)=="//"||(trimmed.size()>=2&&trimmed[0]=='/'&&trimmed[1]=='*')) {
+            size_t sp = 0;
+            while (sp < cur.size() && (cur[sp] == ' ' || cur[sp] == '\t'))
+                ++sp;
+            std::string trimmed = cur.substr(sp);
+            if (trimmed.empty() || trimmed.substr(0, 2) == "//" ||
+                (trimmed.size() >= 2 && trimmed[0] == '/' && trimmed[1] == '*')) {
                 block.push_back({cur, nullptr});
-                ++j; continue;
+                ++j;
+                continue;
             }
             break;
         }
 
         // Count parseable entries
-        int np=0;
-        for(auto&e:block) if(e.parsed) ++np;
+        int np = 0;
+        for (auto& e : block)
+            if (e.parsed)
+                ++np;
 
-        if(np<=0) {
-            for(auto&e:block) { out.push_back(e.orig); if(e.parsed) delete e.parsed; }
-            i=j; continue;
+        if (np <= 0) {
+            for (auto& e : block) {
+                out.push_back(e.orig);
+                if (e.parsed)
+                    delete e.parsed;
+            }
+            i = j;
+            continue;
         }
 
         // Compute section widths
-        int max_s1=0;
-        for(auto&e:block){
-            if(!e.parsed) continue;
-            std::string s1=e.parsed->type_kw+(e.parsed->qualifier.empty()?"":" "+e.parsed->qualifier);
-            max_s1=std::max(max_s1,(int)s1.size());
+        int max_s1 = 0;
+        for (auto& e : block) {
+            if (!e.parsed)
+                continue;
+            std::string s1 =
+                e.parsed->type_kw + (e.parsed->qualifier.empty() ? "" : " " + e.parsed->qualifier);
+            max_s1 = std::max(max_s1, (int)s1.size());
         }
-        int s1_w = std::max(vo.section1_min_width, max_s1+1);
+        int s1_w = std::max(vo.section1_min_width, max_s1 + 1);
 
-        int max_dim=0;
-        for(auto&e:block) if(e.parsed) max_dim=std::max(max_dim,(int)e.parsed->dim.size());
-        int s2_w = max_dim>0 ? std::max(vo.section2_min_width, max_dim+1) : 0;
+        int max_dim = 0;
+        for (auto& e : block)
+            if (e.parsed)
+                max_dim = std::max(max_dim, (int)e.parsed->dim.size());
+        int s2_w = max_dim > 0 ? std::max(vo.section2_min_width, max_dim + 1) : 0;
 
-        size_t max_slots=0;
-        for(auto&e:block) if(e.parsed) max_slots=std::max(max_slots,e.parsed->declarators.size());
+        size_t max_slots = 0;
+        for (auto& e : block)
+            if (e.parsed)
+                max_slots = std::max(max_slots, e.parsed->declarators.size());
 
-        std::vector<int> id_widths(max_slots,0), trail_widths(max_slots,0);
-        for(size_t slot=0;slot<max_slots;++slot){
-            int mx_id=0,mx_tr=0;
-            for(auto&e:block){
-                if(!e.parsed) continue;
-                if(slot<e.parsed->declarators.size()){
-                    mx_id=std::max(mx_id,(int)e.parsed->declarators[slot].first.size());
-                    mx_tr=std::max(mx_tr,(int)e.parsed->declarators[slot].second.size());
+        std::vector<int> id_widths(max_slots, 0), trail_widths(max_slots, 0);
+        for (size_t slot = 0; slot < max_slots; ++slot) {
+            int mx_id = 0, mx_tr = 0;
+            for (auto& e : block) {
+                if (!e.parsed)
+                    continue;
+                if (slot < e.parsed->declarators.size()) {
+                    mx_id = std::max(mx_id, (int)e.parsed->declarators[slot].first.size());
+                    mx_tr = std::max(mx_tr, (int)e.parsed->declarators[slot].second.size());
                 }
             }
-            id_widths[slot]=std::max(vo.section3_min_width, mx_id+1);
-            trail_widths[slot]=std::max(vo.section4_min_width, mx_tr);
+            id_widths[slot] = std::max(vo.section3_min_width, mx_id + 1);
+            trail_widths[slot] = std::max(vo.section4_min_width, mx_tr);
         }
 
-        auto pad_to=[](std::string s,int w)->std::string{
-            if((int)s.size()<w) s.resize(w,' ');
+        auto pad_to = [](std::string s, int w) -> std::string {
+            if ((int)s.size() < w)
+                s.resize(w, ' ');
             return s;
         };
 
-        for(auto&e:block){
-            if(!e.parsed){out.push_back(e.orig); continue;}
-            const auto& vp=*e.parsed;
+        for (auto& e : block) {
+            if (!e.parsed) {
+                out.push_back(e.orig);
+                continue;
+            }
+            const auto& vp = *e.parsed;
             int line_s1_w = s1_w;
             int line_s2_w = s2_w;
             std::vector<int> line_id_widths = id_widths;
             std::vector<int> line_trail_widths = trail_widths;
             if (vo.align_adaptive) {
-                std::string s1part = vp.type_kw + (vp.qualifier.empty()?"":" "+vp.qualifier);
+                std::string s1part = vp.type_kw + (vp.qualifier.empty() ? "" : " " + vp.qualifier);
                 // Cumulative minimum target end columns — same model as port_declaration.
                 int t1 = vo.section1_min_width;
                 int t2 = t1 + (s2_w > 0 ? vo.section2_min_width : 0);
 
-                int e1 = std::max(t1, (int)s1part.size()+1);
+                int e1 = std::max(t1, (int)s1part.size() + 1);
                 line_s1_w = e1;
 
                 int e2 = e1;
                 if (s2_w > 0) {
-                    int c2 = vp.dim.empty() ? 0 : (int)vp.dim.size()+1;
+                    int c2 = vp.dim.empty() ? 0 : (int)vp.dim.size() + 1;
                     e2 = std::max(t2, e1 + c2);
                     line_s2_w = e2 - e1;
                 }
 
-                // Keep declarator/trailing widths block-wide so a name or initializer that overflows
-                // its minimum section still moves following semicolons consistently for the block.
+                // Keep declarator/trailing widths block-wide so a name or initializer that
+                // overflows its minimum section still moves following semicolons consistently for
+                // the block.
                 line_trail_widths.clear();
                 for (const auto& [_, tr] : vp.declarators)
                     line_trail_widths.push_back(std::max(vo.section4_min_width, (int)tr.size()));
             }
             std::string ln = vp.indent;
-            std::string s1part = vp.type_kw + (vp.qualifier.empty()?"":" "+vp.qualifier);
+            std::string s1part = vp.type_kw + (vp.qualifier.empty() ? "" : " " + vp.qualifier);
             ln += pad_to(s1part, line_s1_w);
-            if(line_s2_w>0) ln += pad_to(vp.dim, line_s2_w);
-            size_t nd=vp.declarators.size();
-            for(size_t k=0;k<nd;++k){
-                bool is_last=(k==nd-1);
-                const auto& nm=vp.declarators[k].first;
-                const auto& tr=vp.declarators[k].second;
-                if(!is_last){
+            if (line_s2_w > 0)
+                ln += pad_to(vp.dim, line_s2_w);
+            size_t nd = vp.declarators.size();
+            for (size_t k = 0; k < nd; ++k) {
+                bool is_last = (k == nd - 1);
+                const auto& nm = vp.declarators[k].first;
+                const auto& tr = vp.declarators[k].second;
+                if (!is_last) {
                     ln += pad_to(nm, line_id_widths[k]);
-                    if(!tr.empty()&&vo.section4_min_width>0&&k<line_trail_widths.size()&&line_trail_widths[k]>1){
+                    if (!tr.empty() && vo.section4_min_width > 0 && k < line_trail_widths.size() &&
+                        line_trail_widths[k] > 1) {
                         ln += pad_to(tr, line_trail_widths[k]) + ", ";
-                    } else if(k<line_trail_widths.size()){
+                    } else if (k < line_trail_widths.size()) {
                         ln += pad_to(tr, line_trail_widths[k]) + ", ";
                     } else {
                         ln += tr + ", ";
                     }
                 } else {
                     // Last slot — mirrors Python _reassemble_var_line last-slot logic
-                    // Pad name to slot width (same as Python: line = line + name.ljust(id_widths[k]))
-                    if(k<line_id_widths.size())
+                    // Pad name to slot width (same as Python: line = line +
+                    // name.ljust(id_widths[k]))
+                    if (k < line_id_widths.size())
                         ln += pad_to(nm, line_id_widths[k]);
                     else
                         ln += nm;
-                    if(!tr.empty() && vo.section4_min_width>0 && k<line_trail_widths.size() && line_trail_widths[k]>1) {
+                    if (!tr.empty() && vo.section4_min_width > 0 && k < line_trail_widths.size() &&
+                        line_trail_widths[k] > 1) {
                         // trailing content exists + section4 configured: pad trailing then ";"
                         ln += pad_to(tr, line_trail_widths[k]) + ";";
                     } else {
                         // Python else branch: trailing.ljust(w) + trailing + ";"
                         // For empty trailing this gives: spaces(w) + "" + ";" = padding + ";"
-                        if(k<line_trail_widths.size())
+                        if (k < line_trail_widths.size())
                             ln += pad_to(tr, line_trail_widths[k]);
                         ln += tr + ";";
                     }
                 }
             }
-            if(!vp.comment.empty()) ln += vp.comment;
-            while(!ln.empty()&&ln.back()==' ') ln.pop_back();
+            if (!vp.comment.empty())
+                ln += vp.comment;
+            while (!ln.empty() && ln.back() == ' ')
+                ln.pop_back();
             out.push_back(ln);
             delete e.parsed;
         }
-        i=j;
+        i = j;
     }
-    std::string r; for(size_t k=0;k<out.size();++k){if(k)r+='\n'; r+=out[k];} return r;
+    std::string r;
+    for (size_t k = 0; k < out.size(); ++k) {
+        if (k)
+            r += '\n';
+        r += out[k];
+    }
+    return r;
 }
 
 // ---------------------------------------------------------------------------
@@ -1202,22 +1529,30 @@ static std::string align_var_pass(const std::string& text, const FormatOptions& 
 // ---------------------------------------------------------------------------
 
 // Collect lines from start until ')' at depth 0 followed by ';'
-static bool collect_instance(const std::vector<std::string>& lines, size_t start,
-                              size_t& end_i, std::string& flat) {
+static bool collect_instance(const std::vector<std::string>& lines, size_t start, size_t& end_i,
+                             std::string& flat) {
     std::vector<std::string> parts;
-    int depth=0;
-    size_t j=start;
-    while(j<lines.size()){
-        std::string stripped=lines[j];
-        size_t sp=0; while(sp<stripped.size()&&(stripped[sp]==' '||stripped[sp]=='\t')) ++sp;
+    int depth = 0;
+    size_t j = start;
+    while (j < lines.size()) {
+        std::string stripped = lines[j];
+        size_t sp = 0;
+        while (sp < stripped.size() && (stripped[sp] == ' ' || stripped[sp] == '\t'))
+            ++sp;
         parts.push_back(stripped.substr(sp));
-        for(char ch:lines[j]){
-            if(ch=='(') ++depth;
-            else if(ch==')') --depth;
-            else if(ch==';'&&depth==0){
-                end_i=j+1;
-                flat="";
-                for(size_t k=0;k<parts.size();++k){ if(k) flat+=' '; flat+=parts[k]; }
+        for (char ch : lines[j]) {
+            if (ch == '(')
+                ++depth;
+            else if (ch == ')')
+                --depth;
+            else if (ch == ';' && depth == 0) {
+                end_i = j + 1;
+                flat = "";
+                for (size_t k = 0; k < parts.size(); ++k) {
+                    if (k)
+                        flat += ' ';
+                    flat += parts[k];
+                }
                 return true;
             }
         }
@@ -1228,182 +1563,260 @@ static bool collect_instance(const std::vector<std::string>& lines, size_t start
 
 // Extract content of outermost (...) immediately before ;
 static bool extract_port_list(const std::string& flat, std::string& port_list) {
-    auto semi=flat.rfind(';');
-    if(semi==std::string::npos) return false;
-    int j=(int)semi-1;
-    while(j>=0&&(flat[j]==' '||flat[j]=='\t')) --j;
-    if(j<0||flat[j]!=')') return false;
-    int close=j;
-    int depth=1;
+    auto semi = flat.rfind(';');
+    if (semi == std::string::npos)
+        return false;
+    int j = (int)semi - 1;
+    while (j >= 0 && (flat[j] == ' ' || flat[j] == '\t'))
+        --j;
+    if (j < 0 || flat[j] != ')')
+        return false;
+    int close = j;
+    int depth = 1;
     --j;
-    while(j>=0&&depth>0){
-        if(flat[j]==')') ++depth;
-        else if(flat[j]=='(') --depth;
+    while (j >= 0 && depth > 0) {
+        if (flat[j] == ')')
+            ++depth;
+        else if (flat[j] == '(')
+            --depth;
         --j;
     }
-    port_list=flat.substr(j+2,close-(j+2));
+    port_list = flat.substr(j + 2, close - (j + 2));
     // trim
-    size_t a=0; while(a<port_list.size()&&(port_list[a]==' '||port_list[a]=='\t'||port_list[a]=='\n')) ++a;
-    size_t b=port_list.size(); while(b>a&&(port_list[b-1]==' '||port_list[b-1]=='\t'||port_list[b-1]=='\n')) --b;
-    port_list=port_list.substr(a,b-a);
+    size_t a = 0;
+    while (a < port_list.size() &&
+           (port_list[a] == ' ' || port_list[a] == '\t' || port_list[a] == '\n'))
+        ++a;
+    size_t b = port_list.size();
+    while (b > a &&
+           (port_list[b - 1] == ' ' || port_list[b - 1] == '\t' || port_list[b - 1] == '\n'))
+        --b;
+    port_list = port_list.substr(a, b - a);
     return true;
 }
 
 // Parse named port connections .name(signal), ...
 // Returns false if positional
 static bool parse_named_ports(const std::string& port_list,
-                               std::vector<std::pair<std::string,std::string>>& ports) {
-    size_t i=0,n=port_list.size();
-    while(i<n){
-        while(i<n&&(port_list[i]==' '||port_list[i]=='\t'||port_list[i]=='\n'||port_list[i]==',')) ++i;
-        if(i>=n) break;
-        if(port_list[i]!='.') return false; // positional
+                              std::vector<std::pair<std::string, std::string>>& ports) {
+    size_t i = 0, n = port_list.size();
+    while (i < n) {
+        while (i < n && (port_list[i] == ' ' || port_list[i] == '\t' || port_list[i] == '\n' ||
+                         port_list[i] == ','))
+            ++i;
+        if (i >= n)
+            break;
+        if (port_list[i] != '.')
+            return false; // positional
         ++i;
-        size_t j=i;
-        while(j<n&&(std::isalnum((unsigned char)port_list[j])||port_list[j]=='_')) ++j;
-        std::string port_name=port_list.substr(i,j-i);
-        i=j;
-        while(i<n&&(port_list[i]==' '||port_list[i]=='\t')) ++i;
-        if(i>=n||port_list[i]!='(') return false;
+        size_t j = i;
+        while (j < n && (std::isalnum((unsigned char)port_list[j]) || port_list[j] == '_'))
+            ++j;
+        std::string port_name = port_list.substr(i, j - i);
+        i = j;
+        while (i < n && (port_list[i] == ' ' || port_list[i] == '\t'))
+            ++i;
+        if (i >= n || port_list[i] != '(')
+            return false;
         ++i;
-        int depth=1;
-        size_t sig_start=i;
-        while(i<n&&depth>0){
-            if(port_list[i]=='(') ++depth;
-            else if(port_list[i]==')') --depth;
+        int depth = 1;
+        size_t sig_start = i;
+        while (i < n && depth > 0) {
+            if (port_list[i] == '(')
+                ++depth;
+            else if (port_list[i] == ')')
+                --depth;
             ++i;
         }
-        std::string sig=port_list.substr(sig_start,i-1-sig_start);
+        std::string sig = port_list.substr(sig_start, i - 1 - sig_start);
         // trim sig
-        size_t a=0; while(a<sig.size()&&(sig[a]==' '||sig[a]=='\t')) ++a;
-        size_t b=sig.size(); while(b>a&&(sig[b-1]==' '||sig[b-1]=='\t')) --b;
-        sig=sig.substr(a,b-a);
-        ports.push_back({port_name,sig});
+        size_t a = 0;
+        while (a < sig.size() && (sig[a] == ' ' || sig[a] == '\t'))
+            ++a;
+        size_t b = sig.size();
+        while (b > a && (sig[b - 1] == ' ' || sig[b - 1] == '\t'))
+            --b;
+        sig = sig.substr(a, b - a);
+        ports.push_back({port_name, sig});
     }
     return !ports.empty();
 }
 
 // Split flat into (module_type, param_block, inst_name)
 static bool split_inst_parts(const std::string& flat, std::string& module_type,
-                               std::string& param_block, std::string& inst_name) {
+                             std::string& param_block, std::string& inst_name) {
     size_t i = 0, n = flat.size();
     // Skip leading whitespace
-    while (i < n && (flat[i]==' '||flat[i]=='\t')) ++i;
+    while (i < n && (flat[i] == ' ' || flat[i] == '\t'))
+        ++i;
     // Read module_type (word)
     size_t s = i;
-    while (i < n && (std::isalnum((unsigned char)flat[i])||flat[i]=='_')) ++i;
-    if (i == s) return false;
+    while (i < n && (std::isalnum((unsigned char)flat[i]) || flat[i] == '_'))
+        ++i;
+    if (i == s)
+        return false;
     module_type = flat.substr(s, i - s);
-    while (i < n && (flat[i]==' '||flat[i]=='\t')) ++i;
+    while (i < n && (flat[i] == ' ' || flat[i] == '\t'))
+        ++i;
 
     param_block = "";
     if (i < n && flat[i] == '#') {
         auto ki = flat.find('(', i);
-        if (ki == std::string::npos) return false;
+        if (ki == std::string::npos)
+            return false;
         size_t k = ki + 1;
         int depth = 1;
         while (k < n && depth > 0) {
-            if (flat[k]=='(') ++depth;
-            else if (flat[k]==')') --depth;
+            if (flat[k] == '(')
+                ++depth;
+            else if (flat[k] == ')')
+                --depth;
             ++k;
         }
         param_block = flat.substr(i, k - i);
-        while (!param_block.empty() && (param_block.back()==' '||param_block.back()=='\t'))
+        while (!param_block.empty() && (param_block.back() == ' ' || param_block.back() == '\t'))
             param_block.pop_back();
         i = k;
-        while (i < n && (flat[i]==' '||flat[i]=='\t')) ++i;
+        while (i < n && (flat[i] == ' ' || flat[i] == '\t'))
+            ++i;
     }
 
     // Read inst_name (word)
     s = i;
-    while (i < n && (std::isalnum((unsigned char)flat[i])||flat[i]=='_')) ++i;
-    if (i == s) return false;
+    while (i < n && (std::isalnum((unsigned char)flat[i]) || flat[i] == '_'))
+        ++i;
+    if (i == s)
+        return false;
     inst_name = flat.substr(s, i - s);
     return true;
 }
 
 static std::string expand_instances_pass(const std::string& text, const FormatOptions& opts,
-                                          const std::unordered_map<int,LineKind>* kinds) {
+                                         const std::unordered_map<int, LineKind>* kinds) {
     const std::string port_indent(opts.instance.port_indent_level * opts.indent_size, ' ');
     int m_before = opts.instance.instance_port_name_width;
     int m_inside = opts.instance.instance_port_between_paren_width;
     bool adaptive = opts.instance.align_adaptive;
 
     std::vector<std::string> lines;
-    { std::istringstream ss(text); std::string l; while(std::getline(ss,l)) lines.push_back(l); }
+    {
+        std::istringstream ss(text);
+        std::string l;
+        while (std::getline(ss, l))
+            lines.push_back(l);
+    }
 
     std::vector<std::string> out;
-    size_t i=0;
-    while(i<lines.size()){
-        const std::string& line=lines[i];
+    size_t i = 0;
+    while (i < lines.size()) {
+        const std::string& line = lines[i];
 
-        if (!kinds || !kinds->count((int)i) || kinds->at((int)i) != LineKind::Instantiation) {
-            out.push_back(line); ++i; continue;
+        size_t first = line.find_first_not_of(" \t");
+        if (first == std::string::npos || !(std::isalpha((unsigned char)line[first]) ||
+                                            line[first] == '_' || line[first] == '$')) {
+            out.push_back(line);
+            ++i;
+            continue;
+        }
+        size_t word_end = first + 1;
+        while (word_end < line.size() && (std::isalnum((unsigned char)line[word_end]) ||
+                                          line[word_end] == '_' || line[word_end] == '$'))
+            ++word_end;
+        if (has(SV_KW, lower(line.substr(first, word_end - first)))) {
+            out.push_back(line);
+            ++i;
+            continue;
         }
 
         // Extract leading whitespace
         std::string indent;
         size_t ii = 0;
-        while (ii < line.size() && (line[ii]==' '||line[ii]=='\t')) indent += line[ii++];
+        while (ii < line.size() && (line[ii] == ' ' || line[ii] == '\t'))
+            indent += line[ii++];
 
         // Collect the full instantiation (may span lines) and parse
-        size_t end_i; std::string flat;
-        if (!collect_instance(lines, i, end_i, flat)) { out.push_back(line); ++i; continue; }
+        size_t end_i;
+        std::string flat;
+        if (!collect_instance(lines, i, end_i, flat)) {
+            out.push_back(line);
+            ++i;
+            continue;
+        }
 
         std::string module_type, param_block, inst_name;
         if (!split_inst_parts(flat, module_type, param_block, inst_name)) {
-            for (size_t k=i; k<end_i; ++k) out.push_back(lines[k]);
-            i = end_i; continue;
+            for (size_t k = i; k < end_i; ++k)
+                out.push_back(lines[k]);
+            i = end_i;
+            continue;
         }
 
         // Skip SV keywords
         if (has(SV_KW, lower(module_type)) || has(SV_KW, lower(inst_name))) {
-            for (size_t k=i; k<end_i; ++k) out.push_back(lines[k]);
-            i = end_i; continue;
+            for (size_t k = i; k < end_i; ++k)
+                out.push_back(lines[k]);
+            i = end_i;
+            continue;
         }
 
         std::string port_list;
-        if(!extract_port_list(flat,port_list)){
-            for(size_t k=i;k<end_i;++k) out.push_back(lines[k]);
-            i=end_i; continue;
+        if (!extract_port_list(flat, port_list)) {
+            for (size_t k = i; k < end_i; ++k)
+                out.push_back(lines[k]);
+            i = end_i;
+            continue;
         }
-        std::vector<std::pair<std::string,std::string>> ports;
-        if(!parse_named_ports(port_list,ports)){
-            for(size_t k=i;k<end_i;++k) out.push_back(lines[k]);
-            i=end_i; continue;
+        std::vector<std::pair<std::string, std::string>> ports;
+        if (!parse_named_ports(port_list, ports)) {
+            for (size_t k = i; k < end_i; ++k)
+                out.push_back(lines[k]);
+            i = end_i;
+            continue;
         }
-        int max_port=0,max_sig=0;
-        for(auto&[p,s]:ports){
-            max_port=std::max(max_port,(int)p.size());
-            max_sig=std::max(max_sig,(int)s.size());
+        int max_port = 0, max_sig = 0;
+        for (auto& [p, s] : ports) {
+            max_port = std::max(max_port, (int)p.size());
+            max_sig = std::max(max_sig, (int)s.size());
         }
-        int eff_before=std::max(1,m_before-max_port);
-        int eff_inside=std::max(0,m_inside-max_sig);
+        int eff_before = std::max(1, m_before - max_port);
+        int eff_inside = std::max(0, m_inside - max_sig);
 
-        std::string hdr=indent+module_type;
-        if(!param_block.empty()) hdr+=" "+param_block;
-        hdr+=" "+inst_name+" (";
+        std::string hdr = indent + module_type;
+        if (!param_block.empty())
+            hdr += " " + param_block;
+        hdr += " " + inst_name + " (";
         out.push_back(hdr);
-        for(size_t k=0;k<ports.size();++k){
-            auto&[port,sig]=ports[k];
-            std::string comma=(k+1==ports.size())?"":",";
+        for (size_t k = 0; k < ports.size(); ++k) {
+            auto& [port, sig] = ports[k];
+            std::string comma = (k + 1 == ports.size()) ? "" : ",";
             std::string pline;
-            if(adaptive){
-                int sb=std::max(1,m_before-(int)port.size());
-                int si=std::max(0,m_inside-(int)sig.size());
-                pline=indent+port_indent+"."+port+std::string(sb,' ')+"("+sig+std::string(si,' ')+")"+comma;
+            if (adaptive) {
+                int sb = std::max(1, m_before - (int)port.size() - 1);
+                int si = std::max(0, m_inside - (int)sig.size());
+                pline = indent + port_indent + "." + port + std::string(sb, ' ') + "(" + sig +
+                        std::string(si, ' ') + ")" + comma;
             } else {
-                std::string pname=port; pname.resize(std::max((int)pname.size(),max_port),' ');
-                std::string sname=sig; sname.resize(std::max((int)sname.size(),max_sig),' ');
-                pline=indent+port_indent+"."+pname+std::string(eff_before,' ')+"("+sname+std::string(eff_inside,' ')+")"+comma;
+                std::string pname = port;
+                pname.resize(std::max((int)pname.size(), max_port), ' ');
+                std::string sname = sig;
+                sname.resize(std::max((int)sname.size(), max_sig), ' ');
+                pline = indent + port_indent + "." + pname + std::string(eff_before, ' ') + "(" +
+                        sname + std::string(eff_inside, ' ') + ")" + comma;
             }
-            while(!pline.empty()&&pline.back()==' ') pline.pop_back();
+            while (!pline.empty() && pline.back() == ' ')
+                pline.pop_back();
             out.push_back(pline);
         }
-        out.push_back(indent+");");
-        i=end_i;
+        out.push_back(indent + ");");
+        i = end_i;
     }
-    std::string r; for(size_t k=0;k<out.size();++k){if(k)r+='\n'; r+=out[k];} return r;
+    std::string r;
+    for (size_t k = 0; k < out.size(); ++k) {
+        if (k)
+            r += '\n';
+        r += out[k];
+    }
+    return r;
 }
 
 // ---------------------------------------------------------------------------
@@ -1411,38 +1824,54 @@ static std::string expand_instances_pass(const std::string& text, const FormatOp
 // ---------------------------------------------------------------------------
 
 static std::string trim_copy(const std::string& s) {
-    size_t a=0; while(a<s.size()&&(s[a]==' '||s[a]=='\t')) ++a;
-    size_t b=s.size(); while(b>a&&(s[b-1]==' '||s[b-1]=='\t')) --b;
-    return s.substr(a,b-a);
+    size_t a = 0;
+    while (a < s.size() && (s[a] == ' ' || s[a] == '\t'))
+        ++a;
+    size_t b = s.size();
+    while (b > a && (s[b - 1] == ' ' || s[b - 1] == '\t'))
+        --b;
+    return s.substr(a, b - a);
 }
 
-static bool find_simple_call(const std::string& line, size_t& name_start,
-                             size_t& name_end, size_t& open, size_t& close) {
+static bool find_simple_call(const std::string& line, size_t& name_start, size_t& name_end,
+                             size_t& open, size_t& close) {
     static const std::unordered_set<std::string> SKIP = {
-        "if","for","foreach","while","repeat","wait","case","casex","casez",
-        "module","macromodule","function","task","covergroup","class","property",
-        "sequence","assert","assume","cover"
-    };
-    for(size_t i=0;i<line.size();++i) {
-        unsigned char ch=(unsigned char)line[i];
-        if(!(std::isalpha(ch)||line[i]=='_'||line[i]=='$')) continue;
-        size_t s=i++;
-        while(i<line.size()&&(std::isalnum((unsigned char)line[i])||line[i]=='_'||line[i]=='$')) ++i;
-        size_t e=i;
-        size_t j=i;
-        while(j<line.size()&&(line[j]==' '||line[j]=='\t')) ++j;
-        if(j>=line.size()||line[j]!='(') continue;
-        if(s>0 && line[s-1]=='.') continue;
-        std::string name=line.substr(s,e-s);
-        if(has(SKIP,lower(name))) continue;
-        int depth=1;
-        size_t k=j+1;
-        for(;k<line.size();++k) {
-            if(line[k]=='(') ++depth;
-            else if(line[k]==')' && --depth==0) break;
+        "if",    "for",      "foreach",  "while",       "repeat",   "wait", "case",
+        "casex", "casez",    "module",   "macromodule", "function", "task", "covergroup",
+        "class", "property", "sequence", "assert",      "assume",   "cover"};
+    for (size_t i = 0; i < line.size(); ++i) {
+        unsigned char ch = (unsigned char)line[i];
+        if (!(std::isalpha(ch) || line[i] == '_' || line[i] == '$'))
+            continue;
+        size_t s = i++;
+        while (i < line.size() &&
+               (std::isalnum((unsigned char)line[i]) || line[i] == '_' || line[i] == '$'))
+            ++i;
+        size_t e = i;
+        size_t j = i;
+        while (j < line.size() && (line[j] == ' ' || line[j] == '\t'))
+            ++j;
+        if (j >= line.size() || line[j] != '(')
+            continue;
+        if (s > 0 && line[s - 1] == '.')
+            continue;
+        std::string name = line.substr(s, e - s);
+        if (has(SKIP, lower(name)))
+            continue;
+        int depth = 1;
+        size_t k = j + 1;
+        for (; k < line.size(); ++k) {
+            if (line[k] == '(')
+                ++depth;
+            else if (line[k] == ')' && --depth == 0)
+                break;
         }
-        if(k>=line.size()) return false;
-        name_start=s; name_end=e; open=j; close=k;
+        if (k >= line.size())
+            return false;
+        name_start = s;
+        name_end = e;
+        open = j;
+        close = k;
         return true;
     }
     return false;
@@ -1450,15 +1879,17 @@ static bool find_simple_call(const std::string& line, size_t& name_start,
 
 static std::string render_call_single(const std::string& prefix, const std::string& name,
                                       const std::vector<std::string>& args,
-                                      const std::string& suffix,
-                                      const FunctionOptions& fo) {
+                                      const std::string& suffix, const FunctionOptions& fo) {
     std::string r = prefix + name + (fo.space_before_paren ? " " : "") + "(";
-    if(fo.space_inside_paren && !args.empty()) r += " ";
-    for(size_t i=0;i<args.size();++i) {
-        if(i) r += ", ";
+    if (fo.space_inside_paren && !args.empty())
+        r += " ";
+    for (size_t i = 0; i < args.size(); ++i) {
+        if (i)
+            r += ", ";
         r += args[i];
     }
-    if(fo.space_inside_paren && !args.empty()) r += " ";
+    if (fo.space_inside_paren && !args.empty())
+        r += " ";
     r += ")" + suffix;
     return r;
 }
@@ -1467,70 +1898,93 @@ static std::string format_function_calls_pass(const std::string& text, const For
     const auto& fo = opts.function;
     auto disabled = find_disabled(text);
     std::vector<std::string> lines;
-    { std::istringstream ss(text); std::string l; while(std::getline(ss,l)) lines.push_back(l); }
+    {
+        std::istringstream ss(text);
+        std::string l;
+        while (std::getline(ss, l))
+            lines.push_back(l);
+    }
 
     std::vector<std::string> out;
     int pos = 0;
-    for(const auto& line:lines) {
+    for (const auto& line : lines) {
         int line_start = pos;
         pos += (int)line.size() + 1; // +1 for the newline consumed by getline
-        if(line.find('\n')!=std::string::npos) { out.push_back(line); continue; }
-        if(in_disabled(line_start, disabled)) { out.push_back(line); continue; }
-        size_t ns=0,ne=0,op=0,cl=0;
-        if(!find_simple_call(line, ns, ne, op, cl)) { out.push_back(line); continue; }
-        std::string args_text = line.substr(op+1, cl-op-1);
+        if (line.find('\n') != std::string::npos) {
+            out.push_back(line);
+            continue;
+        }
+        if (in_disabled(line_start, disabled)) {
+            out.push_back(line);
+            continue;
+        }
+        size_t ns = 0, ne = 0, op = 0, cl = 0;
+        if (!find_simple_call(line, ns, ne, op, cl)) {
+            out.push_back(line);
+            continue;
+        }
+        std::string args_text = line.substr(op + 1, cl - op - 1);
         auto raw_args = split_top_level(args_text);
         std::vector<std::string> args;
-        for(auto& a:raw_args) {
-            auto t=trim_copy(a);
-            if(!t.empty()) args.push_back(t);
+        for (auto& a : raw_args) {
+            auto t = trim_copy(a);
+            if (!t.empty())
+                args.push_back(t);
         }
 
         std::string prefix = line.substr(0, ns);
-        std::string name = line.substr(ns, ne-ns);
-        std::string suffix = line.substr(cl+1);
+        std::string name = line.substr(ns, ne - ns);
+        std::string suffix = line.substr(cl + 1);
         std::string prefix_trimmed = trim_copy(prefix);
         std::string prefix_lower = lower(prefix_trimmed);
         auto is_bare_id = [](const std::string& s) -> bool {
-            if (s.empty()) return false;
+            if (s.empty())
+                return false;
             char c0 = s[0];
-            if (!std::isalpha((unsigned char)c0) && c0 != '_' && c0 != '$') return false;
+            if (!std::isalpha((unsigned char)c0) && c0 != '_' && c0 != '$')
+                return false;
             for (size_t k = 1; k < s.size(); ++k) {
                 char c = s[k];
-                if (!std::isalnum((unsigned char)c) && c != '_' && c != '$') return false;
+                if (!std::isalnum((unsigned char)c) && c != '_' && c != '$')
+                    return false;
             }
             return true;
         };
-        if (is_bare_id(prefix_trimmed)
-                || prefix_lower.find("function") != std::string::npos
-                || prefix_lower.find("task") != std::string::npos
-                || prefix_lower.find("module") != std::string::npos
-                || prefix_lower.find("class") != std::string::npos) {
+        if (is_bare_id(prefix_trimmed) || prefix_lower.find("if") != std::string::npos ||
+            prefix_lower.find("while") != std::string::npos ||
+            prefix_lower.find("for") != std::string::npos ||
+            prefix_lower.find("repeat") != std::string::npos ||
+            prefix_lower.find("function") != std::string::npos ||
+            prefix_lower.find("task") != std::string::npos ||
+            prefix_lower.find("module") != std::string::npos ||
+            prefix_lower.find("class") != std::string::npos) {
             out.push_back(line);
             continue;
         }
         std::string single = render_call_single(prefix, name, args, suffix, fo);
 
         bool do_break = false;
-        if(fo.break_policy=="always") {
+        if (fo.break_policy == "always") {
             do_break = !args.empty();
-        } else if(fo.break_policy=="auto") {
-            do_break = ((int)single.size() > fo.line_length)
-                    || (fo.arg_count >= 0 && (int)args.size() >= fo.arg_count);
+        } else if (fo.break_policy == "auto") {
+            do_break = ((int)single.size() > fo.line_length) ||
+                       (fo.arg_count >= 0 && (int)args.size() >= fo.arg_count);
         }
-        if(!do_break || fo.break_policy=="never") {
+        if (!do_break || fo.break_policy == "never") {
             out.push_back(single);
             continue;
         }
 
         std::string open_text = prefix + name + (fo.space_before_paren ? " " : "") + "(";
-        if(fo.layout=="hanging") {
+        if (fo.layout == "hanging") {
             std::string hang(open_text.size(), ' ');
             std::string r = open_text;
-            for(size_t i=0;i<args.size();++i) {
-                if(i) r += "\n" + hang;
+            for (size_t i = 0; i < args.size(); ++i) {
+                if (i)
+                    r += "\n" + hang;
                 r += args[i];
-                if(i+1<args.size()) r += ",";
+                if (i + 1 < args.size())
+                    r += ",";
             }
             r += ")" + suffix;
             out.push_back(r);
@@ -1538,16 +1992,23 @@ static std::string format_function_calls_pass(const std::string& text, const For
             std::string base_indent(prefix.size(), ' ');
             std::string arg_indent = base_indent + std::string(std::max(0, opts.indent_size), ' ');
             std::string r = open_text + "\n";
-            for(size_t i=0;i<args.size();++i) {
+            for (size_t i = 0; i < args.size(); ++i) {
                 r += arg_indent + args[i];
-                if(i+1<args.size()) r += ",";
+                if (i + 1 < args.size())
+                    r += ",";
                 r += "\n";
             }
             r += base_indent + ")" + suffix;
             out.push_back(r);
         }
     }
-    std::string r; for(size_t k=0;k<out.size();++k){if(k)r+='\n'; r+=out[k];} return r;
+    std::string r;
+    for (size_t k = 0; k < out.size(); ++k) {
+        if (k)
+            r += '\n';
+        r += out[k];
+    }
+    return r;
 }
 
 // ---------------------------------------------------------------------------
@@ -1557,52 +2018,78 @@ static std::string format_function_calls_pass(const std::string& text, const For
 // Given a single line that starts a module declaration,
 // extract prefix (including '('), ports_str (between outermost parens), suffix (')...;').
 // Returns false if not a single-line module header.
-static bool extract_single_line_module_header(const std::string& line,
-                                               std::string& prefix,
-                                               std::string& ports_str,
-                                               std::string& suffix_str) {
+static bool extract_single_line_module_header(const std::string& line, std::string& prefix,
+                                              std::string& ports_str, std::string& suffix_str) {
     size_t i = 0, n = line.size();
     // Skip leading whitespace
-    while (i < n && (line[i]==' '||line[i]=='\t')) ++i;
+    while (i < n && (line[i] == ' ' || line[i] == '\t'))
+        ++i;
     // Skip keyword (module/macromodule)
-    while (i < n && std::isalnum((unsigned char)line[i])) ++i;
-    while (i < n && (line[i]==' '||line[i]=='\t')) ++i;
+    size_t kw_start = i;
+    while (i < n && std::isalnum((unsigned char)line[i]))
+        ++i;
+    std::string keyword = lower(line.substr(kw_start, i - kw_start));
+    if (keyword != "module" && keyword != "macromodule")
+        return false;
+    while (i < n && (line[i] == ' ' || line[i] == '\t'))
+        ++i;
     // Skip module name (identifier)
-    while (i < n && (std::isalnum((unsigned char)line[i])||line[i]=='_')) ++i;
-    while (i < n && (line[i]==' '||line[i]=='\t')) ++i;
+    while (i < n && (std::isalnum((unsigned char)line[i]) || line[i] == '_'))
+        ++i;
+    while (i < n && (line[i] == ' ' || line[i] == '\t'))
+        ++i;
     // Skip optional #(...) param block
     if (i < n && line[i] == '#') {
         ++i;
-        while (i < n && (line[i]==' '||line[i]=='\t')) ++i;
+        while (i < n && (line[i] == ' ' || line[i] == '\t'))
+            ++i;
         if (i < n && line[i] == '(') {
-            int depth = 1; ++i;
+            int depth = 1;
+            ++i;
             while (i < n && depth > 0) {
-                if (line[i]=='(') ++depth;
-                else if (line[i]==')') --depth;
+                if (line[i] == '(')
+                    ++depth;
+                else if (line[i] == ')')
+                    --depth;
                 ++i;
             }
-            while (i < n && (line[i]==' '||line[i]=='\t')) ++i;
+            while (i < n && (line[i] == ' ' || line[i] == '\t'))
+                ++i;
         }
     }
     // Expect '('
-    if (i >= n || line[i] != '(') return false;
-    size_t open_paren = i; ++i;
+    if (i >= n || line[i] != '(')
+        return false;
+    size_t open_paren = i;
+    ++i;
     // Find matching ')' on same line
     int depth = 1;
     while (i < n && depth > 0) {
-        if (line[i]=='(') ++depth;
-        else if (line[i]==')') { if (--depth==0) break; }
-        if (depth > 0) ++i;
+        if (line[i] == '(')
+            ++depth;
+        else if (line[i] == ')') {
+            if (--depth == 0)
+                break;
+        }
+        if (depth > 0)
+            ++i;
     }
-    if (i >= n || depth != 0) return false;
-    size_t close_paren = i; ++i;
+    if (i >= n || depth != 0)
+        return false;
+    size_t close_paren = i;
+    ++i;
     // Skip whitespace, expect ';'
-    while (i < n && (line[i]==' '||line[i]=='\t')) ++i;
-    if (i >= n || line[i] != ';') return false;
-    size_t semi_pos = i; ++i;
+    while (i < n && (line[i] == ' ' || line[i] == '\t'))
+        ++i;
+    if (i >= n || line[i] != ';')
+        return false;
+    size_t semi_pos = i;
+    ++i;
     // Must be end of line
-    while (i < n && (line[i]==' '||line[i]=='\t')) ++i;
-    if (i != n) return false;
+    while (i < n && (line[i] == ' ' || line[i] == '\t'))
+        ++i;
+    if (i != n)
+        return false;
 
     prefix = line.substr(0, open_paren + 1); // up to and including '('
     ports_str = line.substr(open_paren + 1, close_paren - open_paren - 1);
@@ -1611,20 +2098,39 @@ static bool extract_single_line_module_header(const std::string& line,
 }
 
 static std::string format_portlist_pass(const std::string& text, const FormatOptions& opts,
-                                         const std::unordered_map<int,LineKind>* kinds) {
+                                        const std::unordered_map<int, LineKind>* kinds) {
     const std::string indent_unit(opts.indent_size, ' ');
 
     std::vector<std::string> lines;
-    { std::istringstream ss(text); std::string l; while(std::getline(ss,l)) lines.push_back(l); }
+    {
+        std::istringstream ss(text);
+        std::string l;
+        while (std::getline(ss, l))
+            lines.push_back(l);
+    }
 
     std::vector<std::string> out;
     for (size_t i = 0; i < lines.size(); ++i) {
-        const std::string& line = lines[i];
+        std::string line = lines[i];
 
-        // Only process lines classified as ModuleHeader
-        if (!kinds || !kinds->count((int)i) || kinds->at((int)i) != LineKind::ModuleHeader) {
-            out.push_back(line);
-            continue;
+        size_t first = line.find_first_not_of(" \t");
+        bool module_start =
+            first != std::string::npos && (line.compare(first, 7, "module ") == 0 ||
+                                           line.compare(first, 12, "macromodule ") == 0);
+        size_t consumed_end = i;
+        if (module_start && line.find(';') == std::string::npos) {
+            std::string flat = line;
+            size_t j = i + 1;
+            for (; j < lines.size(); ++j) {
+                std::string trimmed = trim_copy(lines[j]);
+                flat += " " + trimmed;
+                if (trimmed.find(");") != std::string::npos)
+                    break;
+            }
+            if (j < lines.size()) {
+                line = flat;
+                consumed_end = j;
+            }
         }
 
         // Try to extract single-line module header: module foo [#(...)] (ports);
@@ -1633,109 +2139,192 @@ static std::string format_portlist_pass(const std::string& text, const FormatOpt
             out.push_back(line);
             continue;
         }
+        (void)kinds;
 
         auto ports = split_top_level(ports_str);
         std::vector<std::string> trimmed_ports;
         for (auto& p : ports) {
-            size_t a = 0; while (a<p.size()&&(p[a]==' '||p[a]=='\t')) ++a;
-            size_t b = p.size(); while (b>a&&(p[b-1]==' '||p[b-1]=='\t')) --b;
-            if (b > a) trimmed_ports.push_back(p.substr(a, b-a));
+            size_t a = 0;
+            while (a < p.size() && (p[a] == ' ' || p[a] == '\t'))
+                ++a;
+            size_t b = p.size();
+            while (b > a && (p[b - 1] == ' ' || p[b - 1] == '\t'))
+                --b;
+            if (b > a)
+                trimmed_ports.push_back(p.substr(a, b - a));
         }
-        if (trimmed_ports.empty()) { out.push_back(line); continue; }
+        if (trimmed_ports.empty()) {
+            out.push_back(line);
+            continue;
+        }
 
         // Leading whitespace
         std::string leading_ws;
-        for (size_t k = 0; k < line.size() && (line[k]==' '||line[k]=='\t'); ++k) leading_ws += line[k];
+        for (size_t k = 0; k < line.size() && (line[k] == ' ' || line[k] == '\t'); ++k)
+            leading_ws += line[k];
         std::string port_indent = leading_ws + indent_unit;
 
         // ANSI vs non-ANSI detection
-        static const std::unordered_set<std::string> ANSI_DIR = {"input","output","inout","ref"};
+        static const std::unordered_set<std::string> ANSI_DIR = {"input", "output", "inout", "ref"};
         bool is_ansi = false;
         for (auto& p : trimmed_ports) {
-            std::istringstream ss(p); std::string first; ss >> first;
-            if (!first.empty() && has(ANSI_DIR, lower(first))) { is_ansi = true; break; }
+            std::istringstream ss(p);
+            std::string first;
+            ss >> first;
+            if (!first.empty() && has(ANSI_DIR, lower(first))) {
+                is_ansi = true;
+                break;
+            }
         }
 
         std::string new_lines_str;
         if (is_ansi) {
             std::string port_lines;
             for (size_t k = 0; k < trimmed_ports.size(); ++k) {
-                std::string comma = (k+1 < trimmed_ports.size()) ? "," : "";
+                std::string comma =
+                    (k + 1 < trimmed_ports.size() || opts.port_declaration.align) ? "," : "";
                 port_lines += port_indent + trimmed_ports[k] + comma + "\n";
             }
-            if (!port_lines.empty() && port_lines.back()=='\n') port_lines.pop_back();
-            if (opts.port_declaration.align)
+            if (!port_lines.empty() && port_lines.back() == '\n')
+                port_lines.pop_back();
+            if (opts.port_declaration.align) {
                 port_lines = align_port_pass(port_lines, opts, nullptr);
+                std::vector<std::string> aligned_lines;
+                {
+                    std::istringstream ss(port_lines);
+                    std::string l;
+                    while (std::getline(ss, l)) {
+                        size_t last = l.find_last_not_of(" \t");
+                        if (last != std::string::npos && l[last] == ',') {
+                            size_t before = l.find_last_not_of(" \t", last - 1);
+                            l.erase(before + 1, last - before - 1);
+                        }
+                        aligned_lines.push_back(l);
+                    }
+                }
+                port_lines.clear();
+                for (size_t ai = 0; ai < aligned_lines.size(); ++ai) {
+                    if (ai)
+                        port_lines += '\n';
+                    port_lines += aligned_lines[ai];
+                }
+                size_t last = port_lines.find_last_not_of(" \t\n");
+                if (last != std::string::npos && port_lines[last] == ',')
+                    port_lines.erase(last, 1);
+                while (!port_lines.empty() &&
+                       (port_lines.back() == ' ' || port_lines.back() == '\t'))
+                    port_lines.pop_back();
+            }
             new_lines_str = prefix + "\n" + port_lines + "\n" + leading_ws + suffix_str;
         } else {
             // Check all are simple identifiers (char scan)
             bool all_simple = true;
             for (auto& p : trimmed_ports) {
-                if (p.empty()) { all_simple=false; break; }
-                char c0 = p[0];
-                if (!std::isalpha((unsigned char)c0) && c0!='_' && c0!='$') { all_simple=false; break; }
-                for (size_t k=1; k<p.size(); ++k) {
-                    char c=p[k];
-                    if (!std::isalnum((unsigned char)c)&&c!='_'&&c!='$') { all_simple=false; break; }
+                if (p.empty()) {
+                    all_simple = false;
+                    break;
                 }
-                if (!all_simple) break;
+                char c0 = p[0];
+                if (!std::isalpha((unsigned char)c0) && c0 != '_' && c0 != '$') {
+                    all_simple = false;
+                    break;
+                }
+                for (size_t k = 1; k < p.size(); ++k) {
+                    char c = p[k];
+                    if (!std::isalnum((unsigned char)c) && c != '_' && c != '$') {
+                        all_simple = false;
+                        break;
+                    }
+                }
+                if (!all_simple)
+                    break;
             }
-            if (!all_simple) { out.push_back(line); continue; }
+            if (!all_simple) {
+                out.push_back(line);
+                continue;
+            }
 
             std::string port_block;
-            if(opts.port.non_ansi_port_per_line_enabled && opts.port.non_ansi_port_per_line>0){
-                int n=opts.port.non_ansi_port_per_line;
-                for(size_t gi=0;gi<trimmed_ports.size();gi+=(size_t)n){
-                    size_t end_g=std::min(gi+(size_t)n,trimmed_ports.size());
-                    std::string comma=(end_g<trimmed_ports.size())?",":"";
-                    std::string grp_line=port_indent;
-                    for(size_t k=gi;k<end_g;++k){
-                        if(k>gi) grp_line+=", ";
-                        grp_line+=trimmed_ports[k];
-                    }
-                    grp_line+=comma;
-                    port_block+=grp_line+"\n";
+            if (opts.port.non_ansi_port_per_line_enabled && opts.port.non_ansi_port_per_line > 0) {
+                int n = opts.port.non_ansi_port_per_line;
+                if ((int)trimmed_ports.size() <= n) {
+                    for (size_t k = i; k <= consumed_end; ++k)
+                        out.push_back(lines[k]);
+                    i = consumed_end;
+                    continue;
                 }
-            } else if(opts.port.non_ansi_port_max_line_length_enabled && opts.port.non_ansi_port_max_line_length>0){
-                int max_len=opts.port.non_ansi_port_max_line_length;
+                for (size_t gi = 0; gi < trimmed_ports.size(); gi += (size_t)n) {
+                    size_t end_g = std::min(gi + (size_t)n, trimmed_ports.size());
+                    std::string comma = (end_g < trimmed_ports.size()) ? "," : "";
+                    std::string grp_line = port_indent;
+                    for (size_t k = gi; k < end_g; ++k) {
+                        if (k > gi)
+                            grp_line += ", ";
+                        grp_line += trimmed_ports[k];
+                    }
+                    grp_line += comma;
+                    port_block += grp_line + "\n";
+                }
+            } else if (opts.port.non_ansi_port_max_line_length_enabled &&
+                       opts.port.non_ansi_port_max_line_length > 0) {
+                int max_len = opts.port.non_ansi_port_max_line_length;
                 std::vector<std::string> current;
-                for(size_t pi=0;pi<trimmed_ports.size();++pi){
-                    std::string candidate=port_indent;
-                    for(size_t k=0;k<current.size();++k){ if(k) candidate+=", "; candidate+=current[k]; }
-                    candidate+=", "+trimmed_ports[pi];
-                    if(!current.empty()&&(int)candidate.size()>max_len){
-                        std::string row=port_indent;
-                        for(size_t k=0;k<current.size();++k){ if(k) row+=", "; row+=current[k]; }
-                        row+=",";
-                        port_block+=row+"\n";
-                        current={trimmed_ports[pi]};
+                for (size_t pi = 0; pi < trimmed_ports.size(); ++pi) {
+                    std::string candidate = port_indent;
+                    for (size_t k = 0; k < current.size(); ++k) {
+                        if (k)
+                            candidate += ", ";
+                        candidate += current[k];
+                    }
+                    candidate += ", " + trimmed_ports[pi];
+                    if (!current.empty() && (int)candidate.size() > max_len) {
+                        std::string row = port_indent;
+                        for (size_t k = 0; k < current.size(); ++k) {
+                            if (k)
+                                row += ", ";
+                            row += current[k];
+                        }
+                        row += ",";
+                        port_block += row + "\n";
+                        current = {trimmed_ports[pi]};
                     } else {
                         current.push_back(trimmed_ports[pi]);
                     }
                 }
-                if(!current.empty()){
-                    std::string row=port_indent;
-                    for(size_t k=0;k<current.size();++k){ if(k) row+=", "; row+=current[k]; }
-                    port_block+=row+"\n";
+                if (!current.empty()) {
+                    std::string row = port_indent;
+                    for (size_t k = 0; k < current.size(); ++k) {
+                        if (k)
+                            row += ", ";
+                        row += current[k];
+                    }
+                    port_block += row + "\n";
                 }
             } else {
-                for(size_t k=0;k<trimmed_ports.size();++k){
-                    std::string comma=(k+1<trimmed_ports.size())?",":"";
-                    port_block+=port_indent+trimmed_ports[k]+comma+"\n";
+                for (size_t k = 0; k < trimmed_ports.size(); ++k) {
+                    std::string comma = (k + 1 < trimmed_ports.size()) ? "," : "";
+                    port_block += port_indent + trimmed_ports[k] + comma + "\n";
                 }
             }
-            if(!port_block.empty()&&port_block.back()=='\n') port_block.pop_back();
+            if (!port_block.empty() && port_block.back() == '\n')
+                port_block.pop_back();
             new_lines_str = prefix + "\n" + port_block + "\n" + leading_ws + suffix_str;
         }
 
         // Split new_lines_str by \n and push each line
         std::istringstream rs(new_lines_str);
         std::string rl;
-        while (std::getline(rs, rl)) out.push_back(rl);
+        while (std::getline(rs, rl))
+            out.push_back(rl);
+        i = consumed_end;
     }
 
     std::string r;
-    for (size_t k = 0; k < out.size(); ++k) { if (k) r += '\n'; r += out[k]; }
+    for (size_t k = 0; k < out.size(); ++k) {
+        if (k)
+            r += '\n';
+        r += out[k];
+    }
     return r;
 }
 
@@ -1745,218 +2334,594 @@ static std::string format_portlist_pass(const std::string& text, const FormatOpt
 // format_source — main entry point
 // ---------------------------------------------------------------------------
 
-std::string format_source(const std::string& source, const FormatOptions& opts) {
-    const std::string indent_unit(opts.indent_size, ' ');
-    auto disabled = find_disabled(source);
-    auto tokens   = tokenize(source);
+std::string format_source(const std::string& source, const FormatOptions& opts,
+                          std::shared_ptr<const SyntaxTree> ext_tree) {
+    // -----------------------------------------------------------------------
+    // STEP 1: Build (or reuse) the slang SyntaxTree
+    //
+    // The SyntaxTree is slang's parse tree — it represents the full structure
+    // of the Verilog/SystemVerilog source (modules, ports, statements, etc.)
+    // without doing any semantic elaboration.
+    //
+    // If the caller already parsed the same source (ext_tree != null), reuse
+    // it to avoid a redundant parse.  Otherwise we own our own SourceManager.
+    //
+    // source_only_tree = true means we are using the caller's tree; the token
+    // positions in that tree map directly to `source` bytes.
+    // -----------------------------------------------------------------------
+    const std::string& input = source;
+    std::unique_ptr<SourceManager> sm_owned;
+    std::shared_ptr<const SyntaxTree> tree;
+    bool source_only_tree = false;
+    if (ext_tree) {
+        tree = ext_tree;
+        source_only_tree = true;
+    } else {
+        sm_owned = std::make_unique<SourceManager>();
+        tree = SyntaxTree::fromText(input, *sm_owned);
+    }
 
-    // --- Slang SyntaxTree classification of original source lines ---
+    // -----------------------------------------------------------------------
+    // STEP 3: Build helper data structures
+    //
+    // indent_unit  — the string for one indent level, e.g. "    " (4 spaces).
+    //
+    // disabled     — list of [start, end) byte ranges that are inside
+    //                `// verilog_format: off` … `// verilog_format: on`
+    //                regions.  Tokens inside these ranges are copied verbatim.
+    //
+    // tokens       — ordered list of Tok structs extracted from the CST.
+    //                Each Tok has: text, pos (byte offset), and bool flags
+    //                (whitespace, comment, directive, keyword, etc.).
+    // -----------------------------------------------------------------------
+    const std::string indent_unit(opts.indent_size, ' ');
+    auto disabled = find_disabled(input);
+    auto tokens = collect_cst_tokens(input, *tree, source_only_tree);
+
+    // -----------------------------------------------------------------------
+    // STEP 4: Classify every original source line by its syntactic role
+    //
+    // LineClassifier walks the SyntaxTree and assigns each line a LineKind
+    // (e.g. port declaration, variable declaration, assignment, instance, …).
+    // This is used later by the alignment passes so they only align lines of
+    // the same kind within a contiguous block.
+    // -----------------------------------------------------------------------
     std::unordered_map<int, LineKind> orig_line_kinds;
     {
-        SourceManager sm;
-        auto tree = SyntaxTree::fromText(source, sm);
-        LineClassifier clf(sm);
+        LineClassifier clf(tree->sourceManager());
         clf.visit(tree->root());
         orig_line_kinds = std::move(clf.kinds);
     }
 
-    // Precompute byte-offset -> 0-based original line number
+    // -----------------------------------------------------------------------
+    // STEP 5: Build byte-offset → original line number table
+    //
+    // pos_to_orig_line[byte_offset] = 0-based line number in `input`.
+    // Used to detect whether two tokens are on the same original line (needed
+    // for the inline-comment logic below).
+    // -----------------------------------------------------------------------
     std::vector<int> pos_to_orig_line;
-    pos_to_orig_line.reserve(source.size() + 1);
+    pos_to_orig_line.reserve(input.size() + 1);
     {
         int ln = 0;
-        for (char c : source) {
+        for (char c : input) {
             pos_to_orig_line.push_back(ln);
-            if (c == '\n') ++ln;
+            if (c == '\n')
+                ++ln;
         }
-        pos_to_orig_line.push_back(ln);
+        pos_to_orig_line.push_back(ln); // sentinel for the byte past the last char
     }
 
-    // Track original -> formatted line mapping
+    // -----------------------------------------------------------------------
+    // STEP 6: State variables for the token-walking loop
+    //
+    // The main loop below walks every token exactly once and builds `out` —
+    // the formatted output string.  All the variables below track the
+    // "current state of the world" as we advance through the token stream.
+    // -----------------------------------------------------------------------
+
+    // fmt_line_count  — how many '\n' characters have been written to `out`
+    //                   so far.  Used to build orig_to_fmt_line.
+    // orig_to_fmt_line — maps original line number → formatted line number.
+    //                   Needed to remap LineKind classification after formatting.
     int fmt_line_count = 0;
-    std::unordered_map<int,int> orig_to_fmt_line;
+    std::unordered_map<int, int> orig_to_fmt_line;
 
     std::string out;
-    out.reserve(source.size() + source.size()/4);
+    out.reserve(input.size() + input.size() / 4); // pre-allocate ~25% extra
 
-    int  indent_level = 0;
+    // indent_level — current nesting depth (in units of indent_unit).
+    // indent_stack — stack of how much each INDENT_OPEN keyword added, so
+    //               the matching INDENT_CLOSE can pop the exact same amount.
+    //               (modules add opts.default_indent_level_inside_module_block,
+    //                everything else adds 1.)
+    int indent_level = 0;
     std::vector<int> indent_stack;
-    bool at_bol     = true;
-    int  dim_depth  = 0;
-    int  paren_depth= 0;
-    int  do_depth   = 0;
+
+    // at_bol    — true when the next character we emit starts a fresh line,
+    //             so we must emit the indentation prefix first.
+    bool at_bol = true;
+
+    // dim_depth — how many unmatched '[' we have seen since the last ';'.
+    //             Nonzero means we are inside an array dimension like [7:0].
+    //             Spacing rules differ inside dimensions.
+    int dim_depth = 0;
+
+    // paren_depth — how many unmatched '(' we have seen.
+    //               Used to distinguish top-level ';' (statement end) from
+    //               ';' inside a for(;;) header.
+    int paren_depth = 0;
+
+    // do_depth  — counts nested `do` keywords so we know when `end while`
+    //             belongs to a do…while (MustAppend) vs. a plain `while`.
+    int do_depth = 0;
+
+    // pending_nl — true means we want a newline BEFORE the next token, but
+    //              haven't emitted it yet.  Deferred so that inline comments
+    //              can suppress it if they live on the same source line.
     bool pending_nl = false;
-    int  blank_pend = 0;
+
+    // blank_pend — number of extra blank lines to insert before the next
+    //              token (capped at opts.blank_lines_between_items).
+    int blank_pend = 0;
+
+    // in_pp_cond — true while we are inside a preprocessor conditional that
+    //              takes an argument on the same line, e.g. `ifdef MACRO_NAME.
+    //              We need a newline after the argument.
     bool in_pp_cond = false;
-    bool after_dis  = false;
-    bool struct_pend= false;
+
+    // after_dis  — true immediately after we exit a disabled region.
+    //              If the next whitespace token contains a newline, we must
+    //              emit pending_nl so the re-enabled code starts on its own line.
+    bool after_dis = false;
+
+    // struct_pend — true after we see `struct` or `union` keyword; the next
+    //               `{` should be treated as a struct-brace (indented block)
+    //               rather than a concatenation brace.
+    bool struct_pend = false;
+
+    // case_expr_pending / case_expr_depth
+    //   After `case`/`casex`/`casez`/`caseinside` we expect a `(expr)`.
+    //   pending goes true at the keyword; depth records the paren nesting level
+    //   of the opening `(`.  When we see the matching `)`, we schedule a newline
+    //   (the case items start on the next line).
+    bool case_expr_pending = false;
+    int case_expr_depth = -1;
+
+    // control_expr_pending / control_expr_depth
+    //   Same idea for `if`/`for`/`foreach`/`while`/`repeat` — after the closing
+    //   `)` of the condition, we set single_stmt_pending so the body gets
+    //   an extra indent level if it has no `begin`.
+    bool control_expr_pending = false;
+    int control_expr_depth = -1;
+
+    // single_stmt_pending — set after the `)` of an if/for/while condition.
+    //                       If the very next token at BOL is NOT `begin`, we
+    //                       bump indent_level by 1 (single_stmt_active = true).
+    // single_stmt_active  — true while we are inside a bodyless single-statement
+    //                       block; reset (and indent_level decremented) at `;`.
+    bool single_stmt_pending = false;
+    bool single_stmt_active = false;
+
+    // do_while_tail — true for the `while` token that closes a `do…while`.
+    //                 Prevents that `while` from being treated as a loop header
+    //                 (which would set control_expr_pending again).
+    bool do_while_tail = false;
+
+    // brace_stk — stack that records whether each open `{` is a struct/union
+    //             brace (value "struct") or something else ("other").
+    //             Only struct braces trigger indentation.
     std::vector<std::string> brace_stk;
 
+    // prev — pointer to the previous non-whitespace Tok, used by spaces_req()
+    //        and break_dec() to decide spacing/line-break between token pairs.
     const Tok* prev = nullptr;
 
+    // -----------------------------------------------------------------------
+    // Helper lambdas
+    //
+    // flush_nl() — actually writes the deferred newlines to `out`.
+    //              Called just before emitting a token (unless MustAppend).
+    //
+    // emit(text) — writes `text` to `out`, prepending indentation if we are
+    //              at the beginning of a line (at_bol == true).
+    // -----------------------------------------------------------------------
     auto flush_nl = [&]() {
-        if (pending_nl) { out+='\n'; at_bol=true; pending_nl=false; ++fmt_line_count; }
-        if (blank_pend>0) {
-            if (!at_bol) { out+='\n'; at_bol=true; ++fmt_line_count; }
-            for (int k=0;k<blank_pend;++k) { out+='\n'; at_bol=true; ++fmt_line_count; }
-            blank_pend=0;
+        if (pending_nl) {
+            out += '\n';
+            at_bol = true;
+            pending_nl = false;
+            ++fmt_line_count;
+        }
+        if (blank_pend > 0) {
+            if (!at_bol) {
+                out += '\n';
+                at_bol = true;
+                ++fmt_line_count;
+            }
+            for (int k = 0; k < blank_pend; ++k) {
+                out += '\n';
+                at_bol = true;
+                ++fmt_line_count;
+            }
+            blank_pend = 0;
         }
     };
     auto emit = [&](const std::string& text) {
         if (at_bol) {
-            for (int k=0;k<indent_level;++k) out+=indent_unit;
-            at_bol=false;
+            for (int k = 0; k < indent_level; ++k)
+                out += indent_unit;
+            at_bol = false;
         }
-        out+=text;
+        out += text;
     };
 
-    for (size_t i=0; i<tokens.size(); ++i) {
-        const Tok& tok=tokens[i];
+    // -----------------------------------------------------------------------
+    // STEP 7: Main token loop — single pass over all tokens
+    //
+    // For each token we:
+    //   A. Skip / passthrough disabled-region tokens verbatim.
+    //   B. Skip whitespace tokens (we reconstruct spacing from scratch).
+    //   C. Decide spacing (spaces_req) and line-break (break_dec) from the
+    //      previous token.
+    //   D. Handle inline comments (don't let pending_nl split them off).
+    //   E. Flush pending newlines or append-space depending on break decision.
+    //   F. Handle single-statement indent (no `begin` after if/for/while).
+    //   G. Decrement indent BEFORE emitting INDENT_CLOSE keywords (end, endmodule, …)
+    //      so the closing keyword aligns with the matching open keyword.
+    //   H. Emit the token text (with keyword-case transformation if needed).
+    //   I. Record orig→fmt line mapping.
+    //   J. Update bracket/paren/dim depth counters.
+    //   K. Post-emit: open new indent level, schedule newlines, track pp-conds.
+    // -----------------------------------------------------------------------
+    for (size_t i = 0; i < tokens.size(); ++i) {
+        const Tok& tok = tokens[i];
 
-        // Disabled region — pass through verbatim
+        // --- A. Disabled region — pass through verbatim ---
+        // Tokens between `// verilog_format: off` and `// verilog_format: on`
+        // are copied to `out` exactly as-is, with no reformatting at all.
+        // We still flush any pending newline first so the disabled block starts
+        // on a fresh line.  `prev` is NOT updated so the token before the
+        // disabled region doesn't influence spacing after it.
         if (in_disabled(tok.pos, disabled)) {
             flush_nl();
-            for (char c : tok.text) if (c == '\n') ++fmt_line_count;
-            out+=tok.text;
-            at_bol=!tok.text.empty()&&tok.text.back()=='\n';
-            after_dis=!at_bol;
-            continue; // don't update prev
+            for (char c : tok.text)
+                if (c == '\n')
+                    ++fmt_line_count;
+            out += tok.text;
+            at_bol = !tok.text.empty() && tok.text.back() == '\n';
+            after_dis = !at_bol; // remember we just left a disabled region mid-line
+            continue;            // don't update prev
         }
 
-        // Whitespace
-        if (tok.ftt==FTT::Whitespace) {
-            int nl=(int)std::count(tok.text.begin(),tok.text.end(),'\n');
-            if (after_dis&&nl>=1) pending_nl=true;
-            after_dis=false;
-            if (nl>1) {
-                int extra=std::min(nl-1, opts.blank_lines_between_items);
-                blank_pend=std::max(blank_pend, extra);
+        // --- B. Whitespace tokens — discard, but extract blank-line info ---
+        // We never copy original whitespace; spacing is completely rewritten.
+        // However, we do respect blank lines between items up to the configured
+        // maximum (opts.blank_lines_between_items).
+        if (tok.whitespace) {
+            int nl = (int)std::count(tok.text.begin(), tok.text.end(), '\n');
+            // If a disabled region ended mid-line and now we see a newline in
+            // the following whitespace, emit the pending newline.
+            if (after_dis && nl >= 1)
+                pending_nl = true;
+            after_dis = false;
+            if (nl > 1) {
+                // More than one newline = at least one blank line between items.
+                // extra = number of blank lines (nl-1 because first \n ends the
+                // current line, subsequent \n's are the blank lines themselves).
+                int extra = std::min(nl - 1, opts.blank_lines_between_items);
+                blank_pend = std::max(blank_pend, extra);
             }
             continue;
         }
 
-        // Spacing / break decision
-        bool in_dim=dim_depth>0;
-        int  spaces=0;
-        SD   dec=SD::Undecided;
+        // --- C. Decide spacing and line-break between prev and tok ---
+        // in_dim: inside array dimension brackets [hi:lo], spacing is tighter.
+        // spaces: how many spaces to insert between prev and tok (0 or 1).
+        // dec:    SD::MustWrap   → force a newline before tok
+        //         SD::MustAppend → force tok onto the same line as prev
+        //         SD::Undecided  → use pending_nl / blank_pend to decide
+        bool in_dim = dim_depth > 0;
+        int spaces = 0;
+        SD dec = SD::Undecided;
         if (prev) {
-            spaces=spaces_req(*prev,tok,opts,in_dim);
-            dec=break_dec(*prev,tok,opts,in_dim);
+            spaces = spaces_req(*prev, tok, opts, in_dim);
+            dec = break_dec(*prev, tok, opts, in_dim);
         }
 
-        // A semicolon schedules a newline, but an inline comment belongs to
-        // the same original line.  Do not let that pending newline split the
-        // comment onto its own line.
+        // --- D. Inline-comment suppression ---
+        // A `;` sets pending_nl=true (statement ended → new line).
+        // But if the very next token is a comment that lives on the same
+        // original source line (e.g. `foo; // comment`), we must NOT emit
+        // the newline yet — the comment must stay on the same line as `foo;`.
         bool inline_comment = false;
-        if ((tok.ftt == FTT::EolComment || tok.ftt == FTT::CommentBlock) && prev) {
+        if ((tok.comment) && prev) {
             int prev_ln =
                 (prev->pos < (int)pos_to_orig_line.size()) ? pos_to_orig_line[prev->pos] : 0;
-            int tok_ln =
-                (tok.pos < (int)pos_to_orig_line.size()) ? pos_to_orig_line[tok.pos] : 0;
-            inline_comment = prev_ln == tok_ln;
+            int tok_ln = (tok.pos < (int)pos_to_orig_line.size()) ? pos_to_orig_line[tok.pos] : 0;
+            inline_comment = prev_ln == tok_ln; // same original line → inline
         }
 
-        // Special: "end while" — kMustAppend only inside do...while
-        if (prev&&prev->lo=="end"&&tok.ftt==FTT::Keyword&&tok.lo=="while") {
-            if (do_depth>0) { dec=SD::MustAppend; --do_depth; }
-            else            { dec=SD::Undecided; }
+        // --- Special: `end while` in a do…while statement ---
+        // In `do begin … end while (cond);` the `while` after `end` is NOT
+        // the start of a new while-loop — it is the tail of the do…while.
+        // We must append it to the same line as `end` (MustAppend) and must
+        // NOT treat it as a new control-expression header.
+        do_while_tail = false;
+        if (prev && prev->lo == "end" && is_keyword(tok) && tok.lo == "while") {
+            if (do_depth > 0) {
+                dec = SD::MustAppend;
+                --do_depth;
+                do_while_tail = true;
+            } else {
+                dec = SD::Undecided;
+            }
         }
 
+        // Suppress the pending newline if this comment is on the same source line.
         if (inline_comment && pending_nl)
             pending_nl = false;
 
-        if (dec==SD::MustWrap) {
-            pending_nl=false;
-            if (!at_bol) { out+='\n'; at_bol=true; ++fmt_line_count; }
-            for (int k=0;k<blank_pend;++k) { out+='\n'; ++fmt_line_count; }
-            blank_pend=0;
-        } else if (dec==SD::MustAppend) {
-            if (pending_nl) { pending_nl=false; blank_pend=0; }
-            if (!at_bol&&spaces>0) out+=std::string(spaces,' ');
+        // --- E. Emit newline / spacing based on break decision ---
+        if (dec == SD::MustWrap) {
+            // Force newline before this token regardless of pending_nl.
+            pending_nl = false;
+            if (!at_bol) {
+                out += '\n';
+                at_bol = true;
+                ++fmt_line_count;
+            }
+            for (int k = 0; k < blank_pend; ++k) {
+                out += '\n';
+                ++fmt_line_count;
+            }
+            blank_pend = 0;
+        } else if (dec == SD::MustAppend) {
+            // Force this token onto the same line — cancel any pending newline.
+            if (pending_nl) {
+                pending_nl = false;
+                blank_pend = 0;
+            }
+            if (!at_bol && spaces > 0)
+                out += std::string(spaces, ' ');
         } else {
+            // Normal: flush deferred newlines first, then add spaces.
             flush_nl();
-            if (!at_bol&&spaces>0) out+=std::string(spaces,' ');
+            if (!at_bol && spaces > 0)
+                out += std::string(spaces, ' ');
         }
 
-        // Indent-close: decrement BEFORE emit
-        if (tok.ftt==FTT::Keyword&&has(INDENT_CLOSE,tok.lo)) {
-            int delta=indent_stack.empty()?1:indent_stack.back();
-            if (!indent_stack.empty()) indent_stack.pop_back();
-            indent_level=std::max(0,indent_level-delta);
-        } else if (tok.ftt==FTT::CloseGroup&&tok.text=="}"
-                   &&!brace_stk.empty()&&brace_stk.back()=="struct") {
-            int delta=indent_stack.empty()?1:indent_stack.back();
-            if (!indent_stack.empty()) indent_stack.pop_back();
-            indent_level=std::max(0,indent_level-delta);
+        // --- F. Single-statement indent (bodyless if/for/while body) ---
+        // single_stmt_pending is set after the `)` closing an if/for/while
+        // condition.  We wait until we are truly at the start of a new line
+        // (at_bol) to decide:
+        //   • If the next token is `begin` → no extra indent needed (begin
+        //     will open its own indented block via INDENT_OPEN).
+        //   • Otherwise → bump indent_level by 1 for this single statement.
+        if (single_stmt_pending && at_bol) {
+            if (is_keyword(tok) && tok.lo == "begin") {
+                single_stmt_pending = false; // begin handles its own indent
+            } else {
+                ++indent_level;
+                single_stmt_pending = false;
+                single_stmt_active = true; // remember to undo at the next `;`
+            }
         }
 
-        // Emit token
-        if (tok.ftt==FTT::Keyword) emit(kw_case(tok.text,opts.keyword_case));
-        else                        emit(tok.text);
+        // --- G. Indent-close: decrement indent BEFORE emitting the token ---
+        // Keywords like `end`, `endmodule`, `endfunction`, `join`, etc. are
+        // in INDENT_CLOSE.  They should appear at the SAME indentation level
+        // as the matching open keyword, so we reduce indent_level first.
+        //
+        // Closing `}` of a struct/union block works the same way — the `}`
+        // should align with the `struct {` line.
+        if (is_keyword(tok) && has(INDENT_CLOSE, tok.lo)) {
+            int delta = indent_stack.empty() ? 1 : indent_stack.back();
+            if (!indent_stack.empty())
+                indent_stack.pop_back();
+            indent_level = std::max(0, indent_level - delta);
+        } else if (is_close_group(tok) && tok.text == "}" && !brace_stk.empty() &&
+                   brace_stk.back() == "struct") {
+            int delta = indent_stack.empty() ? 1 : indent_stack.back();
+            if (!indent_stack.empty())
+                indent_stack.pop_back();
+            indent_level = std::max(0, indent_level - delta);
+        }
 
-        // Record orig->fmt line mapping (only first token from each orig line)
-        if (!in_disabled(tok.pos, disabled) && tok.ftt != FTT::Whitespace) {
+        // --- H. Emit the token ---
+        // Keywords get their case transformed (UPPERCASE / lowercase / as-is)
+        // according to opts.keyword_case.  All other tokens are emitted verbatim.
+        // emit() prepends the indentation string if at_bol is true.
+        if (is_keyword(tok))
+            emit(kw_case(tok.text, opts.keyword_case));
+        else
+            emit(tok.text);
+
+        // --- I. Record original-line → formatted-line mapping ---
+        // Only the first token from each original line is recorded (emplace
+        // does nothing if the key already exists).  Used later to remap
+        // LineKind classifications from orig_line_kinds to fmt_line_kinds.
+        if (!in_disabled(tok.pos, disabled) && !tok.whitespace) {
             int orig_ln = (tok.pos < (int)pos_to_orig_line.size()) ? pos_to_orig_line[tok.pos] : 0;
             orig_to_fmt_line.emplace(orig_ln, fmt_line_count);
         }
 
-        // Track depths
-        if      (tok.text=="[")             ++dim_depth;
-        else if (tok.text=="]"&&dim_depth>0)--dim_depth;
-        else if (tok.text=="(")             ++paren_depth;
-        else if (tok.text==")"&&paren_depth>0)--paren_depth;
-        else if (tok.ftt==FTT::Semicolon)   dim_depth=0;
-
-        // Post-emit: indent-open, pending_nl, pp-cond tracking
-        if (tok.ftt==FTT::Keyword) {
-            if (tok.lo=="do") ++do_depth;
-            if (has(INDENT_OPEN,tok.lo)) {
-                int delta=(tok.lo=="module"||tok.lo=="macromodule")
-                          ? opts.default_indent_level_inside_module_block : 1;
-                indent_level+=delta;
-                indent_stack.push_back(delta);
-                if (has(BLOCK_OPEN,tok.lo)) pending_nl=true;
-            } else if (has(INDENT_CLOSE,tok.lo)) {
-                pending_nl=true;
-            } else if (tok.lo=="struct"||tok.lo=="union") {
-                struct_pend=true;
+        // --- J. Update bracket/paren/dim depth counters ---
+        // dim_depth tracks `[…]` nesting for array dimensions.
+        // paren_depth tracks `(…)` nesting.
+        // When we see `(` after case/if/for/while, record the depth so we
+        // know which `)` closes the expression.
+        // `;` resets dim_depth because dimensions never span statements.
+        if (tok.text == "[")
+            ++dim_depth;
+        else if (tok.text == "]" && dim_depth > 0)
+            --dim_depth;
+        else if (tok.text == "(") {
+            ++paren_depth;
+            if (case_expr_pending) {
+                case_expr_depth = paren_depth; // remember which ')' ends the case expr
+                case_expr_pending = false;
             }
-        } else if (tok.ftt==FTT::OpenGroup&&tok.text=="{") {
+            if (control_expr_pending) {
+                control_expr_depth = paren_depth; // remember which ')' ends the control expr
+                control_expr_pending = false;
+            }
+        } else if (tok.text == ")" && paren_depth > 0) {
+            if (case_expr_depth == paren_depth) {
+                // Closing `)` of `case (expr)` → next token goes on a new line
+                pending_nl = true;
+                case_expr_depth = -1;
+            }
+            if (control_expr_depth == paren_depth) {
+                // Closing `)` of `if (cond)` / `for (…)` / etc.
+                // → schedule a newline so the body starts on a fresh line.
+                // `if (cond) begin` suppresses this via MustAppend in break_dec.
+                single_stmt_pending = true;
+                pending_nl = true;
+                control_expr_depth = -1;
+            }
+            --paren_depth;
+        } else if (tok.text == ";")
+            dim_depth = 0; // `;` always ends any dimension context
+
+        // --- K. Post-emit housekeeping ---
+        // After emitting a token, update state for the NEXT token:
+        //   • Open new indent levels for INDENT_OPEN keywords.
+        //   • Schedule newlines (pending_nl) after block-opening keywords, `;`, etc.
+        //   • Set flags for upcoming special tokens (case expr, control expr, struct).
+        if (is_keyword(tok)) {
+            // Count `do` depth so `end while` can be recognized as do…while tail.
+            if (tok.lo == "do")
+                ++do_depth;
+
+            // After `case`/`casex`/`casez`/`caseinside`, expect `(expr)`.
+            // When the `)` arrives we'll emit a newline before the case items.
+            if (tok.lo == "case" || tok.lo == "casex" || tok.lo == "casez" ||
+                tok.lo == "caseinside")
+                case_expr_pending = true;
+
+            // After `if`/`for`/`foreach`/`while`/`repeat`, expect `(cond)`.
+            // When the `)` arrives we'll decide single-statement indentation.
+            // `while` that closes a do…while (do_while_tail) is excluded.
+            if (tok.lo == "if" || tok.lo == "for" || tok.lo == "foreach" ||
+                (tok.lo == "while" && !do_while_tail) || tok.lo == "repeat")
+                control_expr_pending = true;
+
+            // `begin` cancels single_stmt_pending set by a preceding if/for/while,
+            // because begin…end is its own indented block.
+            if (tok.lo == "begin")
+                single_stmt_pending = false;
+
+            if (has(INDENT_OPEN, tok.lo)) {
+                // Keywords that increase indentation for everything inside them:
+                // module, begin, function, task, fork, …
+                // Modules use a configurable delta (default 1, but configurable);
+                // everything else adds exactly 1 level.
+                int delta = (tok.lo == "module" || tok.lo == "macromodule")
+                                ? opts.default_indent_level_inside_module_block
+                                : 1;
+                indent_level += delta;
+                indent_stack.push_back(delta);
+                // Block-opening keywords (begin, fork, …) also schedule a newline
+                // so the first statement inside appears on the next line.
+                // `case` is handled separately via case_expr_pending.
+                if (has(BLOCK_OPEN, tok.lo) && tok.lo != "case" && tok.lo != "casex" &&
+                    tok.lo != "casez" && tok.lo != "caseinside")
+                    pending_nl = true;
+            } else if (has(INDENT_CLOSE, tok.lo)) {
+                // After emitting `end`/`endmodule`/etc. schedule a newline so
+                // the next statement starts on a fresh line.
+                pending_nl = true;
+            } else if (tok.lo == "struct" || tok.lo == "union") {
+                // Next `{` should be treated as a struct/union brace (indented).
+                struct_pend = true;
+            }
+        } else if (is_open_group(tok) && tok.text == "{") {
             if (struct_pend) {
+                // `{` right after `struct`/`union` → indent the members inside.
                 brace_stk.push_back("struct");
-                pending_nl=true; indent_level+=1; indent_stack.push_back(1);
+                pending_nl = true;
+                indent_level += 1;
+                indent_stack.push_back(1);
             } else {
+                // `{` for concatenation, array literal, etc. → no extra indent.
                 brace_stk.push_back("other");
             }
-            struct_pend=false;
-        } else if (tok.ftt==FTT::CloseGroup&&tok.text=="}") {
-            if (!brace_stk.empty()) brace_stk.pop_back();
-        } else if (tok.ftt==FTT::Semicolon) {
-            if (paren_depth==0) pending_nl=true;
-        } else if (tok.ftt==FTT::EolComment||tok.ftt==FTT::IncludeDirective) {
-            pending_nl=true;
-        } else if (tok.ftt==FTT::CommentBlock) {
-            if (i+1<tokens.size()&&tokens[i+1].ftt==FTT::Whitespace
-                    &&tokens[i+1].text.find('\n')!=std::string::npos)
-                pending_nl=true;
-        } else if (tok.ftt==FTT::Identifier) {
-            if      (has(PP_COND_BARE,tok.lo)) { pending_nl=true; in_pp_cond=false; }
-            else if (has(PP_COND_WITH,tok.lo))   in_pp_cond=true;
-            else if (in_pp_cond)               { pending_nl=true; in_pp_cond=false; }
+            struct_pend = false;
+        } else if (is_close_group(tok) && tok.text == "}") {
+            // Pop the brace stack (indent was already decremented in step G).
+            if (!brace_stk.empty())
+                brace_stk.pop_back();
+        } else if (tok.text == ";") {
+            // Semicolon = end of statement.
+            // At top-level (paren_depth==0) schedule a newline after it.
+            // Inside `for (init; cond; incr)` paren_depth > 0 → no newline.
+            if (paren_depth == 0)
+                pending_nl = true;
+            // If we were in a single-statement body (no begin…end), this `;`
+            // ends it → undo the extra indent level we added.
+            if (single_stmt_active) {
+                indent_level = std::max(0, indent_level - 1);
+                single_stmt_active = false;
+            }
+        } else if (tok.directive) {
+            // Compiler directives (`define, `include, `ifdef, …) always end
+            // their logical line → schedule a newline after them.
+            pending_nl = true;
+        } else if (tok.comment) {
+            // A comment that is followed by a newline in the original whitespace
+            // → schedule a newline (the comment ends the line).
+            if (i + 1 < tokens.size() && tokens[i + 1].whitespace &&
+                tokens[i + 1].text.find('\n') != std::string::npos)
+                pending_nl = true;
+        } else if (is_identifier(tok)) {
+            // Preprocessor conditionals:
+            //   PP_COND_BARE: `else, `endif → no argument, newline immediately.
+            //   PP_COND_WITH: `ifdef, `ifndef, `elsif → argument follows on same
+            //                 line; set in_pp_cond so we newline after the arg.
+            //   in_pp_cond + any other identifier → that was the argument → newline.
+            if (has(PP_COND_BARE, tok.lo)) {
+                pending_nl = true;
+                in_pp_cond = false;
+            } else if (has(PP_COND_WITH, tok.lo))
+                in_pp_cond = true;
+            else if (in_pp_cond) {
+                pending_nl = true;
+                in_pp_cond = false;
+            }
         } else if (in_pp_cond) {
-            pending_nl=true; in_pp_cond=false;
+            // Non-identifier token after a `ifdef-style directive → treat it as
+            // the end of the argument and schedule a newline.
+            pending_nl = true;
+            in_pp_cond = false;
         }
 
-        prev=&tok;
+        prev = &tok; // remember this token for next iteration's spacing decisions
+    } // end main token loop
+
+    // -----------------------------------------------------------------------
+    // STEP 8: Finalize raw output
+    //
+    // If the last token didn't end with a newline, add one.
+    // Collapse multiple trailing newlines to a single one.
+    // -----------------------------------------------------------------------
+    if (!at_bol) {
+        out += '\n';
+        ++fmt_line_count;
     }
 
-    if (!at_bol) { out+='\n'; ++fmt_line_count; }
-
     // Collapse extra trailing newlines to one
-    while (out.size()>=2 && out[out.size()-1]=='\n' && out[out.size()-2]=='\n')
+    while (out.size() >= 2 && out[out.size() - 1] == '\n' && out[out.size() - 2] == '\n')
         out.pop_back();
 
-    // Remap original line classifications to formatted output lines
+    // -----------------------------------------------------------------------
+    // STEP 9: Remap LineKind classifications to formatted line numbers
+    //
+    // orig_line_kinds maps original line numbers to their syntactic role.
+    // After formatting, line numbers change (blank lines added/removed, lines
+    // joined/split).  We use orig_to_fmt_line to translate the classification
+    // so alignment passes operate on the correct formatted lines.
+    // -----------------------------------------------------------------------
     std::unordered_map<int, LineKind> fmt_line_kinds;
     for (auto& [orig_ln, kind] : orig_line_kinds) {
         auto it = orig_to_fmt_line.find(orig_ln);
@@ -1965,40 +2930,60 @@ std::string format_source(const std::string& source, const FormatOptions& opts) 
     }
     const auto* fk = &fmt_line_kinds;
 
-    // Alignment passes (order matches Python format_source)
+    // -----------------------------------------------------------------------
+    // STEP 10: Alignment passes (text-level, line-by-line)
+    //
+    // format_portlist_pass runs first so all module-header port lines exist
+    // before the alignment passes see them.
+    //
+    // After format_portlist_pass, line numbers shift (expanded headers add
+    // lines), making fk stale.  Alignment passes use nullptr so they rely
+    // on syntactic detection (starts_with_port_dir, identifier-not-keyword)
+    // which works correctly on all lines regardless of origin.
+    // assign/var passes still use fk because they target different LineKinds
+    // and format_portlist_pass does not add assignment or variable lines.
+    // -----------------------------------------------------------------------
+    out = format_portlist_pass(out, opts, fk); // expand module header port lists
     if (opts.statement.align)
-        out = align_assign_pass(out, opts, fk);
-    if (opts.port_declaration.align)
-        out = align_port_pass(out, opts, fk);
+        out = align_assign_pass(out, opts, fk); // align `=` in assignments
     if (opts.var_declaration.align)
-        out = align_var_pass(out, opts, fk);
-    if (opts.instance.align)
-        out = expand_instances_pass(out, opts, fk);
-    out = format_function_calls_pass(out, opts);
-    // Always run port list pass
-    out = format_portlist_pass(out, opts, fk);
+        out = align_var_pass(out, opts, fk); // align variable declarations
     if (opts.port_declaration.align)
-        out = align_port_pass(out, opts, nullptr);
+        out = align_port_pass(out, opts, nullptr); // align port decl columns (syntactic)
+    if (opts.instance.align)
+        out = expand_instances_pass(out, opts, nullptr); // expand/align instance ports (syntactic)
+    out = format_function_calls_pass(out, opts);         // format function calls
 
-    // Ensure exactly one trailing newline (mirrors Python: result.rstrip('\n') + '\n')
-    while (!out.empty() && out.back()=='\n') out.pop_back();
+    // -----------------------------------------------------------------------
+    // STEP 11: Final newline normalization
+    //
+    // Mirrors Python: result.rstrip('\n') + '\n'
+    // -----------------------------------------------------------------------
+    while (!out.empty() && out.back() == '\n')
+        out.pop_back();
     out += '\n';
 
-    // Safe-mode: abort if non-whitespace changed.
+    // -----------------------------------------------------------------------
+    // STEP 12: Safe-mode integrity check
+    //
+    // If opts.safe_mode is true, verify that only whitespace changed.
+    // Strip all whitespace from both source and out and compare; if they
+    // differ, the formatter changed actual code content → throw an error.
+    // This is a safety net against formatter bugs that corrupt code.
+    // -----------------------------------------------------------------------
     if (opts.safe_mode) {
-        auto strip=[](const std::string& s){
-            std::string r; r.reserve(s.size());
-            for(char c:s) if(!std::isspace((unsigned char)c)) r+=c;
+        auto strip = [](const std::string& s) {
+            std::string r;
+            r.reserve(s.size());
+            for (char c : s)
+                if (!std::isspace((unsigned char)c))
+                    r += c;
             return r;
         };
-        if (strip(source)!=strip(out))
+        if (strip(source) != strip(out))
             throw SafeModeError(
                 "Formatter safe-mode: non-whitespace content changed — formatting aborted");
     }
-
-    // trailing_newline option
-    if (!opts.trailing_newline && !out.empty() && out.back()=='\n')
-        out.pop_back();
 
     return out;
 }
