@@ -6,6 +6,7 @@
 #include <optional>
 #include <algorithm>
 #include <cctype>
+#include <string_view>
 
 using namespace slang;
 using namespace slang::syntax;
@@ -29,6 +30,52 @@ static std::vector<std::string> split_lines(const std::string& text) {
     return lines;
 }
 
+static bool is_ident_char(char ch) {
+    return std::isalnum((unsigned char)ch) || ch == '_';
+}
+
+static bool starts_with_word(std::string_view text, std::string_view word) {
+    if (!text.starts_with(word))
+        return false;
+    return text.size() == word.size() || !is_ident_char(text[word.size()]);
+}
+
+static bool starts_with_block_terminator(const std::string& line) {
+    size_t first = line.find_first_not_of(" \t");
+    if (first == std::string::npos)
+        return false;
+    std::string_view trimmed(line.data() + first, line.size() - first);
+    return starts_with_word(trimmed, "end") || starts_with_word(trimmed, "endmodule") ||
+           starts_with_word(trimmed, "endfunction") || starts_with_word(trimmed, "endtask") ||
+           starts_with_word(trimmed, "endcase") || starts_with_word(trimmed, "join");
+}
+
+static std::optional<IdentifierAtPosition> identifier_from_source_line(
+    const std::vector<std::string>& lines, int line, int col)
+{
+    if (line < 0 || line >= (int)lines.size())
+        return std::nullopt;
+
+    const std::string& src_line = lines[line];
+    if (col < 0 || col >= (int)src_line.size() || !is_ident_char(src_line[col]))
+        return std::nullopt;
+
+    int start = col;
+    while (start > 0 && is_ident_char(src_line[start - 1]))
+        --start;
+
+    int end = col + 1;
+    while (end < (int)src_line.size() && is_ident_char(src_line[end]))
+        ++end;
+
+    return IdentifierAtPosition{
+        .name = src_line.substr(start, end - start),
+        .line = line,
+        .col = start,
+        .end_col = end,
+    };
+}
+
 // ── Find extent of call starting from identifier ─────────────────────────────
 
 struct CallExtent {
@@ -49,11 +96,16 @@ static CallExtent find_call_extent(const std::vector<std::string>& lines, int li
     if (first[open_pos] == ';')
         return {line, ident_start, line, ident_end};
 
-    // Scan forward across lines until parens balance
+    // Scan forward across lines until parens balance. If parsing recovery leaves an
+    // incomplete call before a block terminator, keep the edit local to the partial call.
     int depth = 0;
+    int last_arg_line = line;
     for (int l = line; l < (int)lines.size(); ++l) {
         const std::string& ln = lines[l];
         int col_start = (l == line) ? open_pos : 0;
+        if (l != line && depth > 0 && starts_with_block_terminator(ln))
+            return {line, ident_start, last_arg_line, (int)lines[last_arg_line].size()};
+
         for (int c = col_start; c < (int)ln.size(); ++c) {
             if (ln[c] == '(') ++depth;
             else if (ln[c] == ')') {
@@ -68,11 +120,12 @@ static CallExtent find_call_extent(const std::vector<std::string>& lines, int li
                 }
             }
         }
+        if (ln.find_first_not_of(" \t") != std::string::npos)
+            last_arg_line = l;
     }
-    // Unbalanced — use end of last scanned line
-    int last_line = (int)lines.size() - 1;
-    int end_col = (int)lines[last_line].size();
-    return {line, ident_start, last_line, end_col};
+
+    // Unbalanced at EOF — replace only the partial call text, not unrelated lines.
+    return {line, ident_start, last_arg_line, (int)lines[last_arg_line].size()};
 }
 
 // ── Parse existing .port(wire) connections ────────────────────────────────────
@@ -269,8 +322,12 @@ std::optional<lsWorkspaceEdit> autofunc(
 
     const std::string& src_line = lines[line];
 
-    // Find identifier at cursor via the parsed SyntaxTree.
-    auto ident = analyzer.identifier_at(uri, line, col);
+    // Normalize the cursor to the full source identifier. Slang recovery for incomplete
+    // calls can report a shifted token range, but autofunc should not depend on which
+    // character of the function name the cursor is on.
+    auto ident = identifier_from_source_line(lines, line, col);
+    if (!ident)
+        ident = analyzer.identifier_at(uri, line, col);
     if (!ident) return std::nullopt;
 
     // Find call extent (may span multiple lines)

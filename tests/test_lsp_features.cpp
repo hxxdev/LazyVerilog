@@ -275,6 +275,46 @@ endmodule
     CHECK(it->second[0].newText == "sum(\n            .i_a(1),\n            .i_b(2)\n        );");
 }
 
+TEST_CASE("autofunc: incomplete call is cursor-position independent", "[autofunc]") {
+    Analyzer analyzer;
+    const std::string uri = "file:///tmp/autofunc_incomplete_call.sv";
+    analyzer.open(uri, R"(task add_number(input int a, input int b, output int result);
+    result = a + b;
+endtask
+
+module top;
+    always_comb begin
+    add_number(
+    end
+endmodule
+)");
+
+    AutoFuncOptions options;
+    options.indent_size = 4;
+    options.use_named_arguments = true;
+
+    const std::string expected =
+        "add_number(\n"
+        "        .a(a),\n"
+        "        .b(b),\n"
+        "        .result(result)\n"
+        "    );";
+
+    for (int col : {4, 5, 13}) {
+        auto edit = autofunc(analyzer, uri, 6, col, options);
+        REQUIRE(edit.has_value());
+        REQUIRE(edit->changes.has_value());
+        auto it = edit->changes->find(uri);
+        REQUIRE(it != edit->changes->end());
+        REQUIRE(it->second.size() == 1);
+        CHECK(it->second[0].range.start.line == 6);
+        CHECK(it->second[0].range.start.character == 4);
+        CHECK(it->second[0].range.end.line == 6);
+        CHECK(it->second[0].range.end.character == 15);
+        CHECK(it->second[0].newText == expected);
+    }
+}
+
 TEST_CASE("autofunc code action formats replacement at insertion column", "[autofunc]") {
     Analyzer analyzer;
     const std::string uri = "file:///tmp/autofunc_code_action_indent.sv";
