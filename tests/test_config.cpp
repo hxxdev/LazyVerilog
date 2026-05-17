@@ -258,9 +258,16 @@ autoarg_on_save = true
 }
 
 TEST_CASE("config: malformed TOML returns defaults", "[config]") {
-    auto dir = make_temp_toml("this is not valid toml @@@ !!!");
+    auto dir = make_temp_toml("[design]\nvcode = \"ok.f\"\ndefine = [\"A\",] @@@\n");
     Config cfg;
-    REQUIRE_NOTHROW(cfg = load_config(dir));
+    std::string warning;
+    ConfigWarning warning_detail;
+    REQUIRE_NOTHROW(cfg = load_config(dir, &warning, &warning_detail));
     CHECK(cfg.compilation.background_compilation == false);
     CHECK(cfg.format.indent_size == 2);
+    CHECK_FALSE(warning.empty());
+    CHECK(warning.find("line 3, column") != std::string::npos);
+    CHECK(warning_detail.path == dir / "lazyverilog.toml");
+    CHECK(warning_detail.line == 3);
+    CHECK(warning_detail.column > 0);
 }

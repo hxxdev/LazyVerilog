@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -164,6 +165,13 @@ struct AutoFuncOptions {
     bool use_named_arguments{true};
 };
 
+struct ConfigWarning {
+    std::filesystem::path path;
+    uint32_t line{0};   // 1-based; 0 when unavailable
+    uint32_t column{0}; // 1-based; 0 when unavailable
+    std::string message;
+};
+
 struct Config {
     DesignConfig design;
     CompilationConfig compilation;
@@ -180,7 +188,9 @@ struct Config {
 /// Load lazyverilog.toml from root directory. Returns defaults if not found.
 /// Unknown keys are silently ignored. On TOML syntax error, returns defaults
 /// and sets *warning to a human-readable message (if warning != nullptr).
-Config load_config(const std::filesystem::path& root, std::string* warning = nullptr);
+/// If warning_detail is provided, it receives the TOML source position when available.
+Config load_config(const std::filesystem::path& root, std::string* warning = nullptr,
+                   ConfigWarning* warning_detail = nullptr);
 
 /// Walk up from `start` (file or directory) looking for lazyverilog.toml.
 /// Returns the directory containing it, or empty path if not found.

@@ -220,6 +220,10 @@ static std::string resolve_vcode_path(const std::filesystem::path& root, const C
     return std::filesystem::absolute(filelist).lexically_normal().string();
 }
 
+static std::string path_to_file_uri(const std::filesystem::path& path) {
+    return "file://" + std::filesystem::absolute(path).lexically_normal().string();
+}
+
 static std::vector<std::string> load_vcode_files(const std::filesystem::path& root,
                                                  const Config& config) {
     std::vector<std::string> paths;
@@ -315,6 +319,37 @@ void LazyVerilogServer::schedule_background_compilation() {
     background_compiler_->schedule(analyzer_.compilation_snapshot());
 }
 
+void LazyVerilogServer::publish_config_diagnostic(const ConfigWarning* warning) {
+    try {
+        if (!config_diagnostic_uri_.empty()) {
+            Notify_TextDocumentPublishDiagnostics::notify clear;
+            clear.params.uri.raw_uri_ = config_diagnostic_uri_;
+            impl_->remote_endpoint.sendNotification(clear);
+            config_diagnostic_uri_.clear();
+        }
+
+        if (!warning || warning->message.empty() || warning->path.empty())
+            return;
+
+        Notify_TextDocumentPublishDiagnostics::notify notif;
+        notif.params.uri.raw_uri_ = path_to_file_uri(warning->path);
+        config_diagnostic_uri_ = notif.params.uri.raw_uri_;
+
+        lsDiagnostic diag;
+        const auto line = warning->line > 0 ? static_cast<int>(warning->line - 1) : 0;
+        const auto column = warning->column > 0 ? static_cast<int>(warning->column - 1) : 0;
+        diag.range.start = lsPosition(line, column);
+        diag.range.end = lsPosition(line, column + 1);
+        diag.severity = lsDiagnosticSeverity::Warning;
+        diag.source = std::string("lazyverilog");
+        diag.message = warning->message;
+        notif.params.diagnostics.push_back(std::move(diag));
+        impl_->remote_endpoint.sendNotification(notif);
+    } catch (const std::exception& e) {
+        std::cerr << "[lazyverilog] config diagnostic error: " << e.what() << "\n";
+    }
+}
+
 void LazyVerilogServer::publish_diagnostics(const std::string& uri) {
     try {
         auto state = analyzer_.get_state(uri);
@@ -368,7 +403,7 @@ void LazyVerilogServer::register_handlers() {
     };
 
     // ── initialize ────────────────────────────────────────────────────────────
-    ep.registerHandler([&](const td_initialize::request& req) {
+    ep.registerHandler([&, show_warning](const td_initialize::request& req) {
         td_initialize::response rsp;
         rsp.id = req.id;
         try {
@@ -426,9 +461,11 @@ void LazyVerilogServer::register_handlers() {
                 if (std::filesystem::exists(p)) {
                     root_ = p;
                     std::string warn;
-                    config_ = load_config(root_, &warn);
+                    ConfigWarning warning_detail;
+                    config_ = load_config(root_, &warn, &warning_detail);
                     if (!warn.empty())
                         show_warning(warn);
+                    publish_config_diagnostic(warn.empty() ? nullptr : &warning_detail);
                     analyzer_.set_defines(config_.design.define);
                     analyzer_.set_extra_files(load_vcode_files(root_, config_),
                                               resolve_vcode_path(root_, config_));
@@ -440,9 +477,11 @@ void LazyVerilogServer::register_handlers() {
                 if (std::filesystem::exists(p)) {
                     root_ = p;
                     std::string warn;
-                    config_ = load_config(root_, &warn);
+                    ConfigWarning warning_detail;
+                    config_ = load_config(root_, &warn, &warning_detail);
                     if (!warn.empty())
                         show_warning(warn);
+                    publish_config_diagnostic(warn.empty() ? nullptr : &warning_detail);
                     analyzer_.set_defines(config_.design.define);
                     analyzer_.set_extra_files(load_vcode_files(root_, config_),
                                               resolve_vcode_path(root_, config_));
@@ -514,9 +553,11 @@ void LazyVerilogServer::register_handlers() {
             try {
                 // Re-read config from disk on every configuration change
                 std::string warn;
-                config_ = load_config(root_, &warn);
+                ConfigWarning warning_detail;
+                config_ = load_config(root_, &warn, &warning_detail);
                 if (!warn.empty())
                     show_warning(warn);
+                publish_config_diagnostic(warn.empty() ? nullptr : &warning_detail);
                 analyzer_.set_defines(config_.design.define);
                 analyzer_.set_extra_files(load_vcode_files(root_, config_),
                                           resolve_vcode_path(root_, config_));
@@ -541,9 +582,11 @@ void LazyVerilogServer::register_handlers() {
                 if (!found.empty()) {
                     root_ = found;
                     std::string warn;
-                    config_ = load_config(root_, &warn);
+                    ConfigWarning warning_detail;
+                    config_ = load_config(root_, &warn, &warning_detail);
                     if (!warn.empty())
                         show_warning(warn);
+                    publish_config_diagnostic(warn.empty() ? nullptr : &warning_detail);
                     analyzer_.set_defines(config_.design.define);
                     analyzer_.set_extra_files(load_vcode_files(root_, config_),
                                               resolve_vcode_path(root_, config_));

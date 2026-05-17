@@ -16,8 +16,13 @@ std::filesystem::path find_config_root(const std::filesystem::path& start) {
     return {};
 }
 
-Config load_config(const std::filesystem::path& root, std::string* warning) {
+Config load_config(const std::filesystem::path& root, std::string* warning,
+                   ConfigWarning* warning_detail) {
     Config cfg{};
+    if (warning)
+        warning->clear();
+    if (warning_detail)
+        *warning_detail = {};
     auto toml_path = root / "lazyverilog.toml";
     if (!std::filesystem::exists(toml_path)) {
         return cfg;
@@ -265,12 +270,40 @@ Config load_config(const std::filesystem::path& root, std::string* warning) {
         // Unknown top-level keys silently ignored (toml++ doesn't error on them)
 
     } catch (const toml::parse_error& e) {
-        std::string msg = std::string("[lazyverilog] lazyverilog.toml parse error: ") + e.what();
+        const auto& pos = e.source().begin;
+        std::string msg = "[lazyverilog] lazyverilog.toml parse error";
+        if (pos)
+            msg +=
+                " at line " + std::to_string(pos.line) + ", column " + std::to_string(pos.column);
+        msg += ": ";
+        msg += std::string(e.description());
         std::cerr << msg << "\n";
         if (warning)
             *warning = msg;
+        if (warning_detail) {
+            warning_detail->path = toml_path;
+            warning_detail->line = pos ? pos.line : 0;
+            warning_detail->column = pos ? pos.column : 0;
+            warning_detail->message = msg;
+        }
+    } catch (const std::exception& e) {
+        std::string msg = std::string("[lazyverilog] config load error: ") + e.what();
+        std::cerr << msg << "\n";
+        if (warning)
+            *warning = msg;
+        if (warning_detail) {
+            warning_detail->path = toml_path;
+            warning_detail->message = msg;
+        }
     } catch (...) {
-        std::cerr << "[lazyverilog] config load error\n";
+        std::string msg = "[lazyverilog] config load error";
+        std::cerr << msg << "\n";
+        if (warning)
+            *warning = msg;
+        if (warning_detail) {
+            warning_detail->path = toml_path;
+            warning_detail->message = msg;
+        }
     }
     return cfg;
 }

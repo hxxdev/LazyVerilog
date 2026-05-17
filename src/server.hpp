@@ -19,10 +19,12 @@ class LazyVerilogServer {
   private:
     void register_handlers();
     void publish_diagnostics(const std::string& uri);
+    void publish_config_diagnostic(const ConfigWarning* warning);
     void configure_background_compiler();
     void schedule_background_compilation();
 
     std::filesystem::path root_;
+    std::string config_diagnostic_uri_;
     Config config_;
     Analyzer analyzer_;
     std::unique_ptr<BackgroundCompiler> background_compiler_;
