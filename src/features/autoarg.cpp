@@ -87,7 +87,7 @@ std::optional<AutoargResult> autoarg_impl(const DocumentState& state, int line, 
 std::string format_autoarg(
     const AutoargResult& result, const AutoargOptions& options, const FormatOptions& format_options)
 {
-    std::string indent((size_t)std::max(0, options.indent_size), ' ');
+    std::string indent((size_t)std::max(0, format_options.indent_size), ' ');
     std::string out = "(\n";
     int ports_per_line = format_options.port.non_ansi_port_per_line_enabled
                              ? format_options.port.non_ansi_port_per_line

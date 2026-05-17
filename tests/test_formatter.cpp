@@ -176,6 +176,7 @@ TEST_CASE("formatter: user-defined output port type stays in type section", "[fo
         "output                                        packet_t            [0:0] test          , VSS                                     ;\n"
         "endmodule\n", opts);
 
+    INFO("formatted output:\n" << formatted);
     CHECK(formatted.find("output                    packet_t") == std::string::npos);
     CHECK(formatted.find("output packet_t") != std::string::npos);
     CHECK(formatted.find("output packet_t   [0:0]") != std::string::npos);

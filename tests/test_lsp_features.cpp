@@ -335,7 +335,6 @@ endmodule
     config.format.indent_size = 4;
     config.format.port.non_ansi_port_per_line_enabled = true;
     config.format.port.non_ansi_port_per_line = 3;
-    config.autoarg.indent_size = 4;
 
     lsCodeActionParams params;
     params.textDocument.uri.raw_uri_ = uri;

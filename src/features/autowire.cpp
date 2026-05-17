@@ -352,17 +352,33 @@ static std::string format_one_decl(const SignalDecl& s, size_t max_dim_len) {
     }
 }
 
-static std::string format_declarations(const std::vector<SignalDecl>& signals) {
+static std::string format_declarations(std::vector<SignalDecl> signals, const AutowireOptions& options) {
     if (signals.empty())
         return {};
+
+    if (options.sort_by_name) {
+        std::sort(signals.begin(), signals.end(), [](const SignalDecl& a, const SignalDecl& b) {
+            if (a.module_name != b.module_name)
+                return a.module_name < b.module_name;
+            return a.name < b.name;
+        });
+    }
+
     size_t max_dim_len = 0;
     for (const auto& s : signals)
         max_dim_len = std::max(max_dim_len, s.dimension.size());
 
     std::string out;
+    std::string last_module;
     for (size_t i = 0; i < signals.size(); ++i) {
         if (i > 0)
             out += "\n";
+        if (options.group_by_instance && signals[i].module_name != last_module) {
+            if (i > 0)
+                out += "\n";
+            out += "// " + signals[i].module_name + "\n";
+            last_module = signals[i].module_name;
+        }
         out += format_one_decl(signals[i], max_dim_len);
     }
     return out;
@@ -432,13 +448,13 @@ static std::vector<SignalDecl> compute_new_signals(const DocumentState& state,
 }
 
 std::string autowire_apply(const DocumentState& state, const SyntaxIndex& syntax_index,
-                           const AutowireOptions& /*options*/, int target_line) {
+                           const AutowireOptions& options, int target_line) {
     auto new_sigs = compute_new_signals(state, syntax_index, target_line);
     if (new_sigs.empty())
         return state.text;
 
     auto lines = split_lines(state.text);
-    std::string decl_text = format_declarations(new_sigs);
+    std::string decl_text = format_declarations(new_sigs, options);
     TargetModuleRangeFinder module_finder(state.tree->sourceManager(), target_line);
     state.tree->root().visit(module_finder);
     int insert_line = module_finder.found ? find_insertion_line(state, module_finder.range) : 0;
@@ -461,11 +477,16 @@ std::string autowire_apply(const DocumentState& state, const SyntaxIndex& syntax
 
 std::vector<std::string> autowire_preview(const DocumentState& state,
                                           const SyntaxIndex& syntax_index,
-                                          const AutowireOptions& /*options*/, int target_line) {
+                                          const AutowireOptions& options, int target_line) {
     auto new_sigs = compute_new_signals(state, syntax_index, target_line);
     std::vector<std::string> out;
     if (!new_sigs.empty()) {
         out.push_back("Will add:");
+        if (options.sort_by_name) {
+            std::sort(new_sigs.begin(), new_sigs.end(), [](const SignalDecl& a, const SignalDecl& b) {
+                return a.name < b.name;
+            });
+        }
         for (const auto& s : new_sigs) {
             std::string line = "  " + s.type_kw;
             if (!s.dimension.empty())

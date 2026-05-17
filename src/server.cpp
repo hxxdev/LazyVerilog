@@ -401,7 +401,9 @@ void LazyVerilogServer::register_handlers() {
             if (state) {
                 // Merge parse diagnostics + lint diagnostics
                 auto all_diags = state->parse_diagnostics;
-                auto lint_diags = run_lint(*state, config_.lint);
+                SyntaxIndex lint_index = state->index;
+                analyzer_.merge_extra_file_modules(lint_index);
+                auto lint_diags = run_lint(*state, config_.lint, &lint_index);
                 all_diags.insert(all_diags.end(), lint_diags.begin(), lint_diags.end());
                 for (const auto& d : all_diags) {
                     lsDiagnostic ld;
@@ -491,7 +493,7 @@ void LazyVerilogServer::register_handlers() {
                 const auto& uri = req.params.textDocument.uri.raw_uri_;
                 auto state = analyzer_.get_state(uri);
                 if (state) {
-                    std::string formatted = format_source(state->text, config_.format);
+                    std::string formatted = format_source(state->text, config_.format, state->tree);
                     if (formatted != state->text) {
                         // Replace the entire document with one edit
                         lsTextEdit edit;
