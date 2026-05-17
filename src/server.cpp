@@ -27,6 +27,7 @@
 #include "LibLsp/lsp/textDocument/inlayHint.h"
 #include "LibLsp/lsp/textDocument/prepareRename.h"
 #include "LibLsp/lsp/textDocument/publishDiagnostics.h"
+#include "LibLsp/lsp/textDocument/range_formatting.h"
 #include "LibLsp/lsp/textDocument/references.h"
 #include "LibLsp/lsp/textDocument/rename.h"
 #include "LibLsp/lsp/textDocument/signature_help.h"
@@ -116,6 +117,58 @@ static std::string json_string(std::string_view text) {
     }
     out += "\"";
     return out;
+}
+
+static lsPosition document_end_position(const std::string& text) {
+    int line = 0;
+    int last_nl = -1;
+    for (int i = 0; i < (int)text.size(); ++i) {
+        if (text[i] == '\n') {
+            ++line;
+            last_nl = i;
+        }
+    }
+    return lsPosition(line, (int)text.size() - last_nl - 1);
+}
+
+static lsTextEdit whole_document_edit(const std::string& old_text, const std::string& new_text) {
+    lsTextEdit edit;
+    edit.range.start = lsPosition(0, 0);
+    edit.range.end = document_end_position(old_text);
+    edit.newText = new_text;
+    return edit;
+}
+
+static std::string slice_lsp_range(const std::string& text, const lsRange& range) {
+    size_t start = lsp_offset(text, range.start.line, range.start.character);
+    size_t end = lsp_offset(text, range.end.line, range.end.character);
+    if (start > text.size())
+        start = text.size();
+    if (end > text.size())
+        end = text.size();
+    if (start > end)
+        start = end;
+    return text.substr(start, end - start);
+}
+
+static lsTextEdit range_format_edit(const std::string& old_text,
+                                    const std::string& formatted_text,
+                                    lsRange range) {
+    if (range.end < range.start)
+        std::swap(range.start, range.end);
+    lsTextEdit edit;
+    edit.range = range;
+    edit.newText = slice_lsp_range(formatted_text, range);
+    return edit;
+}
+
+static std::string workspace_edit_json(const std::string& uri, const lsTextEdit& edit) {
+    return "{\"changes\":{" + json_string(uri) +
+           ":[{\"range\":{\"start\":{\"line\":" + std::to_string(edit.range.start.line) +
+           ",\"character\":" + std::to_string(edit.range.start.character) +
+           "},\"end\":{\"line\":" + std::to_string(edit.range.end.line) +
+           ",\"character\":" + std::to_string(edit.range.end.character) +
+           "}},\"newText\":" + json_string(edit.newText) + "}]}}";
 }
 
 static std::string rtl_tree_json(const RtlTreeNode& node) {
@@ -324,9 +377,10 @@ void LazyVerilogServer::register_handlers() {
             caps.inlayHintProvider = std::make_pair(optional<bool>(config_.inlay_hint.enable),
                                                     optional<InlayHintOptions>{});
 
-            // Execute command — 16 server-side commands
+            // Execute command — server-side commands
             lsExecuteCommandOptions exec_opts;
             exec_opts.commands = {
+                "lazyverilog.format",
                 "lazyverilog.rtlTree",
                 "lazyverilog.rtlTreeReverse",
                 "lazyverilog.autowire",
@@ -495,22 +549,7 @@ void LazyVerilogServer::register_handlers() {
                 if (state) {
                     std::string formatted = format_source(state->text, config_.format, state->tree);
                     if (formatted != state->text) {
-                        // Replace the entire document with one edit
-                        lsTextEdit edit;
-                        // Count lines in original
-                        int line_count = 0;
-                        int last_nl = -1;
-                        for (int k = 0; k < (int)state->text.size(); ++k) {
-                            if (state->text[k] == '\n') {
-                                ++line_count;
-                                last_nl = k;
-                            }
-                        }
-                        int last_line_len = (int)state->text.size() - last_nl - 1;
-                        edit.range.start = lsPosition(0, 0);
-                        edit.range.end = lsPosition(line_count, last_line_len);
-                        edit.newText = formatted;
-                        rsp.result.push_back(std::move(edit));
+                        rsp.result.push_back(whole_document_edit(state->text, formatted));
                     }
                 }
             }
@@ -518,6 +557,29 @@ void LazyVerilogServer::register_handlers() {
             show_warning(e.what());
         } catch (const std::exception& e) {
             std::cerr << "[lazyverilog] formatting error: " << e.what() << "\n";
+        }
+        return rsp;
+    });
+
+    // ── textDocument/rangeFormatting ──────────────────────────────────────────
+    ep.registerHandler([&, show_warning](const td_rangeFormatting::request& req) {
+        td_rangeFormatting::response rsp;
+        rsp.id = req.id;
+        try {
+            const auto& uri = req.params.textDocument.uri.raw_uri_;
+            auto state = analyzer_.get_state(uri);
+            if (state) {
+                // Format the full document so the formatter has surrounding context, but return
+                // an edit restricted to the requested range.
+                std::string formatted = format_source(state->text, config_.format, state->tree);
+                auto edit = range_format_edit(state->text, formatted, req.params.range);
+                if (edit.newText != slice_lsp_range(state->text, edit.range))
+                    rsp.result.push_back(std::move(edit));
+            }
+        } catch (const SafeModeError& e) {
+            show_warning(e.what());
+        } catch (const std::exception& e) {
+            std::cerr << "[lazyverilog] range formatting error: " << e.what() << "\n";
         }
         return rsp;
     });
@@ -806,7 +868,27 @@ void LazyVerilogServer::register_handlers() {
                 rsp.result.SetJsonString(json, lsp::Any::kObjectType);
             };
 
-            if (cmd == "lazyverilog.autoffPreview" || cmd == "lazyverilog.autoffApply") {
+            if (cmd == "lazyverilog.format") {
+                std::string uri = get_string(0);
+                std::string mode = get_string(1);
+                auto state = analyzer_.get_state(uri);
+                if (state) {
+                    std::string formatted = format_source(state->text, config_.format, state->tree);
+                    optional<lsTextEdit> edit;
+                    if (mode == "range") {
+                        int start_line = get_int(2);
+                        int end_line = get_int(3);
+                        lsRange range(lsPosition(start_line, 0), lsPosition(end_line, 0));
+                        auto range_edit = range_format_edit(state->text, formatted, range);
+                        if (range_edit.newText != slice_lsp_range(state->text, range_edit.range))
+                            edit = std::move(range_edit);
+                    } else if (formatted != state->text) {
+                        edit = whole_document_edit(state->text, formatted);
+                    }
+                    if (edit)
+                        rsp.result.SetJsonString(workspace_edit_json(uri, *edit), lsp::Any::kObjectType);
+                }
+            } else if (cmd == "lazyverilog.autoffPreview" || cmd == "lazyverilog.autoffApply") {
                 std::string uri = get_string(0);
                 int ff_line = get_int(1);
                 auto state = analyzer_.get_state(uri);

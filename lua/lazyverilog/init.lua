@@ -258,6 +258,11 @@ function M.setup(user_config)
 		M.connect(args[1], args[2])
 	end, { nargs = "*" })
 
+	-- Register :Format user command.  With a visual range, only those lines are edited.
+	vim.api.nvim_create_user_command("Format", function(opts)
+		M.format(opts.range > 0 and "v" or "n", opts.line1, opts.line2)
+	end, { range = true })
+
 	-- Register server→client notification for partial renames.
 	vim.lsp.handlers["lazyverilog/renameUnresolved"] = function(err, result, _ctx, _config)
 		if err or not result or not result.locations or #result.locations == 0 then return end
@@ -569,37 +574,57 @@ end
 
 --- Format the current buffer.
 ---
---- In normal mode (mode == "n") the whole file is formatted via
---- ``textDocument/formatting``.  In visual mode (mode == "v") the selected
---- line range is sent as ``textDocument/rangeFormatting`` so only the
---- visualised block is touched.
+--- In normal mode (mode == "n") the whole file is formatted.  In visual mode
+--- (mode == "v") the formatter still receives the whole file for context, but
+--- only the selected line range is edited.
 ---
 --- Typical key-map:
 ---   vim.keymap.set("n", "<leader>f", function() require("lazyverilog").format("n") end)
 ---   vim.keymap.set("v", "<leader>f", function() require("lazyverilog").format("v") end)
 ---
 --- Or create a :Format user-command:
----   vim.api.nvim_create_user_command("Format",
----     function(opts) require("lazyverilog").format(opts.range > 0 and "v" or "n") end,
----     { range = true })
-function M.format(mode)
-	if mode == "v" then
-		-- getpos("'<") / getpos("'>") are set when leaving visual mode.
-		-- The marks are 1-indexed; LSP ranges are 0-indexed.
-		local start_pos  = vim.fn.getpos("'<")
-		local end_pos    = vim.fn.getpos("'>")
-		local start_line = start_pos[2] - 1
-		local end_line   = end_pos[2] - 1
-		vim.lsp.buf.format({
-			bufnr = vim.api.nvim_get_current_buf(),
-			range = {
-				start   = { line = start_line, character = 0 },
-				["end"] = { line = end_line, character = 0 },
-			},
-		})
-	else
-		vim.lsp.buf.format({ bufnr = vim.api.nvim_get_current_buf() })
+---   :Format
+---   :'<,'>Format
+function M.format(mode, line1, line2)
+	local bufnr = vim.api.nvim_get_current_buf()
+	local client = vim.lsp.get_clients({ bufnr = bufnr, name = "lazyverilog" })[1]
+	if not client then
+		vim.notify("[LazyVerilog] Format: lazyverilog LSP client not attached", vim.log.levels.ERROR)
+		return
 	end
+
+	local uri = vim.uri_from_bufnr(bufnr)
+	local args
+	if mode == "v" then
+		local start_line
+		local end_line
+		if line1 and line2 then
+			start_line = line1 - 1
+			end_line   = line2
+		else
+			-- getpos("'<") / getpos("'>") are set when leaving visual mode.
+			local start_pos = vim.fn.getpos("'<")
+			local end_pos   = vim.fn.getpos("'>")
+			start_line = math.min(start_pos[2], end_pos[2]) - 1
+			end_line   = math.max(start_pos[2], end_pos[2])
+		end
+		args = { uri, "range", start_line, end_line }
+	else
+		args = { uri, "full" }
+	end
+
+	client:request("workspace/executeCommand", {
+		command   = "lazyverilog.format",
+		arguments = args,
+	}, function(err, edit)
+		if err then
+			vim.notify("[LazyVerilog] Format: " .. tostring(err.message), vim.log.levels.ERROR)
+			return
+		end
+		if edit and edit.changes then
+			vim.lsp.util.apply_workspace_edit(edit, client.offset_encoding or "utf-8")
+		end
+	end, bufnr)
 end
 
 -- ---------------------------------------------------------------------------
